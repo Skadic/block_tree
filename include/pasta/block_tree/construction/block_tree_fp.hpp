@@ -33,6 +33,28 @@ class BlockTreeFP : public BlockTree<input_type, size_type> {
 public:
   size_type const_size = 0;
   size_type sigma_ = 0;
+  ///
+  /// @brief Prune this block and all of its children.
+  ///
+  /// This will set the pointers for each node that is pruned to PRUNED (== -2)
+  /// and will increase and decrease pointers for each new back block or pruned
+  /// back block respectively.
+  ///
+  /// @param[in] counter For each level (starting at the topmost level) and
+  ///   block, contains the number of back blocks pointing to the block
+  /// @param[in] pointer For each level (starting at the topmost level) and
+  ///   block, contains the earliest block index in which the content of this
+  /// @param[in] offset For each level (starting at the topmost level) and
+  ///   block, contains the character offset at which this block's content can
+  /// @param[in] marked_tree For each level (starting at the topmost level) and
+  ///   block, has a 1 if the block is internal, 0 if it is a back block.
+  /// @param[out] pruned_tree The resulting tree after pruning, with the same
+  ///   content as marked_tree (as far as I can see this is unused)
+  /// @param[in] i The current level, 0 being the top level
+  /// @param[in] j The current block being pruned
+  /// @param[in] ranks Rank data structures for each bit vector in marked_tree.
+  /// @return true, if an this block was and stays internal, false otherwise
+  ///
   bool prune_block(
       std::vector<std::vector<size_type>> &counter,
       std::vector<std::vector<size_type>> &pointer,
@@ -40,8 +62,9 @@ public:
       std::vector<pasta::BitVector *> &marked_tree,
       std::vector<pasta::BitVector *> &pruned_tree, size_type i, size_type j,
       std::vector<pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>> &ranks) {
-    // string leaf children can always be pruned
-    // fully padded children don't exist and can be ignored/ sanity check
+    // String leaf children can always be pruned,
+    // since they are contained in the leaf string.
+    // Fully padded children don't exist and can be ignored/sanity check
     // assumes short circuit evaluation as compiler behaviour
     if (static_cast<uint64_t>(i) >= marked_tree.size() ||
         static_cast<uint64_t>(j) >= marked_tree[i]->size()) {
@@ -49,31 +72,40 @@ public:
     }
 
     bool marked_children = false;
-    // we already incremented counters for unmarked blocks during a previous
-    // step and now only need to consider marked blocks
+    // We already incremented counters for back blocks during construction
+    // and now only need to consider internal blocks
     if ((*marked_tree[i])[j] == 1) {
-      // inverse postorder dfs
-      // prune_block returns true if a marked block stays marked false otherwise
+      // inverse postorder dfs. We handle children from back to front.
+      // We need the rank over the internal nodes of this level,
+      // because only the internal nodes generated children on the
+      // next level.
       size_type rank_blk = ranks[i].rank1(j);
       for (size_type k = this->tau_ - 1; k >= 0; k--) {
         marked_children |=
             prune_block(counter, pointer, offset, marked_tree, pruned_tree,
                         i + 1, rank_blk * this->tau_ + k, ranks);
       }
-      // conditions to be pruned are no marked children, no pointers pointing to
-      // me and a former occurrence in S
+      // Conditions to be pruned are:
+      // - no internal children,
+      // - no pointers pointing to me
+      // - an earlier occurrence in the text
       if (!marked_children && counter[i][j] == 0 &&
           pointer[i][j] != NO_FORMER_OCC) {
-
+        // This block is no longer internal
         (*marked_tree[i])[j] = 0;
+        // Since this is a back block now, we need to increment the counters for
+        // the blocks this back block now points to
         counter[i][pointer[i][j]]++;
         if (offset[i][j] > 0) {
           counter[i][pointer[i][j] + 1]++;
         }
+        // We only remove children if we're not at the last level
         if (static_cast<uint64_t>(i + 1) < counter.size()) {
-          // remove all of its children by decrementing counters and marking
-          // them as PRUNED
+          // Remove all of its children by decrementing counters
+          // and marking them as PRUNED
           for (size_type k = this->tau_ - 1; k >= 0; k--) {
+            // If this child node actually exists,
+            // decrement the counters of the blocks the child points to and set
             if (static_cast<uint64_t>(rank_blk * this->tau_) + k <
                 counter[i + 1].size()) {
               auto ptr_child = pointer[i + 1][rank_blk * this->tau_ + k];
@@ -81,16 +113,36 @@ public:
               if (offset[i + 1][rank_blk * this->tau_ + k] > 0) {
                 counter[i + 1][ptr_child + 1]--;
               }
+              // Set this child's pointer to PRUNED
               pointer[i + 1][rank_blk * this->tau_ + k] = PRUNED;
             }
           }
         }
       }
     }
+    // If this node has internal children, has other blocks pointing to itself
+    // or has no earlier occurrence, then it remains internal
     return marked_children || counter[i][j] > 0 ||
            pointer[i][j] == NO_FORMER_OCC;
   };
 
+  ///
+  /// @brief Prunes the block tree
+  ///
+  /// @param[in] counter For each level (starting at the topmost level) and
+  ///   block, contains the number of back blocks pointing to the block
+  /// @param[in] pointer For each level (starting at the topmost level) and
+  ///   block, contains the earliest block index in which the content of this
+  ///   block can be found.
+  /// @param[in] offset For each level (starting at the topmost level) and
+  ///   block, contains the character offset at which this block's content can
+  ///   be found in the block the back-pointer points to.
+  /// @param[in] marked_tree For each level (starting at the topmost level) and
+  ///   block, has a 1 if the block is internal, 0 if it is a back block.
+  /// @param[out] pruned_tree The resulting tree after pruning, with the same
+  ///   content as marked_tree
+  /// @return 0
+  ///
   int32_t pruning_extended(std::vector<std::vector<size_type>> &counter,
                            std::vector<std::vector<size_type>> &pointer,
                            std::vector<std::vector<size_type>> &offset,
@@ -101,6 +153,7 @@ public:
       ranks.push_back(pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>(*bv));
     }
     auto &top_lvl = *marked_tree[0];
+    /// Prune the blocks on the top level from back to front
     for (size_type j = top_lvl.size() - 1; j >= 0; j--) {
       prune_block(counter, pointer, offset, marked_tree, pruned_tree, 0, j,
                   ranks);
@@ -185,25 +238,45 @@ public:
 
   int32_t init_extended(std::vector<input_type> &text) {
     static constexpr uint128_t kPrime = 2305843009213693951ULL;
+    /// The number of characters a block tree with s top-level blocks and arity
+    /// of strictly tau would exceed over the text size
     int64_t added_padding = 0;
+    /// The height of the tree
     int64_t tree_max_height = 0;
+    /// The size of the largest blocks (i.e. the top level blocks)
     int64_t max_blk_size = 0;
+    /// For each level (starting at the top) contains the text start indices of
+    /// each block on the level
     std::vector<std::vector<int64_t>> blk_lvl;
+    /// For each level and each block, contains the first block index at which
+    /// the content of this block appears
     std::vector<std::vector<size_type>> pass1_pointer;
+    /// For each level and each block, contains the offset at which
+    /// the content of this block appears in its back-pointed block
     std::vector<std::vector<size_type>> pass1_offset;
+    /// For each level contains a bit vector containing a 1 for each block that
+    /// is internal and a 0 for each back block
     std::vector<pasta::BitVector *> bv_marked;
+    /// For every level and block counts how many back blocks are pointing to
+    /// the block
     std::vector<std::vector<size_type>> counter;
     std::vector<size_type> pass2_ones;
+    /// The block size for each level, starting at the top level
     std::vector<int64_t> block_size_lvl_temp;
     this->calculate_padding(added_padding, text.size(), tree_max_height,
                             max_blk_size);
     auto is_padded = added_padding > 0 ? 1 : 0;
+    /// The current block size starting at the top level
     int64_t block_size = max_blk_size;
 
+    /// The text start indices of each block on the current level
     std::vector<int64_t> block_text_inx;
     for (uint64_t i = 0; i < text.size(); i += block_size) {
       block_text_inx.push_back(i);
     }
+    // if the blocks on the current level are already below the max leaf length,
+    // we may not divide them further. So the entire block tree just consists of
+    // the current level verbatim, no pointers
     if (block_size <= this->max_leaf_length_) {
       auto *bv = new pasta::BitVector(block_text_inx.size(), 1);
       this->block_tree_types_rs_.push_back(
@@ -225,20 +298,33 @@ public:
     }
     while (block_size > this->max_leaf_length_) {
       block_size_lvl_temp.push_back(block_size);
+      /// Marks whether a block should be internal or not
       auto *bv = new pasta::BitVector(block_text_inx.size(), false);
+      /// If left[i] == 1, then there is an earlier occurrence of
+      /// block[i]block[i+1]
       auto left = pasta::BitVector(block_text_inx.size(), false);
+      /// If right[i] == 1, then there is an earlier occurrence of
+      /// block[i-1]block[i]
       auto right = pasta::BitVector(block_text_inx.size(), false);
       auto pair_size = 2 * block_size;
+      // Check, whether the last block's end extends past the end of the text
       auto last_block_padded =
           static_cast<uint64_t>(block_text_inx[block_text_inx.size() - 1] +
                                 block_size) != text.size()
               ? 1
               : 0;
+      // map block pair hashes to the text index of their occurrences
+      // collecting duplicates in a vector TODO
       std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>> pairs(
           0);
+      // map block hashes to their *block* index,
+      // collecting duplicates in a vector TODO
       std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>> blocks =
           std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>>();
+      // iterate through all blocks on the current level, skipping over the last
+      // block if it is padded
       for (uint64_t i = 0; i < block_text_inx.size() - last_block_padded; i++) {
+        // Hash the current block and insert it into the block hash map
         auto index = block_text_inx[i];
         MersenneRabinKarp<input_type, size_type> rk_block =
             MersenneRabinKarp<input_type, size_type>(text, sigma_, index,
@@ -247,14 +333,22 @@ public:
             MersenneHash<input_type>(text, rk_block.hash_, index, block_size);
         blocks[mh_block].push_back(i);
       }
-      std::vector<size_type> pointers(block_text_inx.size(), -1);
+      // Back pointers, offsets and the incoming-pointer-counters which we need
+      // for pruning later
+      std::vector<size_type> pointers(block_text_inx.size(), NO_FORMER_OCC);
       std::vector<size_type> offsets(block_text_inx.size(), 0);
       std::vector<size_type> counters(block_text_inx.size(), 0);
+      // If a block pairs are larger than the whole text, then there is
+      // nothing really to do on this level. There cannot be any back pointers
       if (static_cast<uint64_t>(pair_size) > text.size()) {
         block_size /= this->tau_;
+        // Start indices of blocks for the next level
         std::vector<int64_t> new_blocks(0);
         for (uint64_t i = 0; i < block_text_inx.size(); i++) {
+          // All of the current blocks are internal
           (*bv)[i] = 1;
+          // We split all blocks on the current level into tau sub-blocks but
+          // only create blocks that start before the end of the text
           for (size_type j = 0; j < this->tau_; j++) {
             if (static_cast<uint64_t>(block_text_inx[i] + (j * block_size)) <
                 text.size()) {
@@ -262,6 +356,7 @@ public:
             }
           }
         }
+        /// There are no pointers, offsets or counters on this level
         std::vector<size_type> p(block_text_inx.size(), -1);
         std::vector<size_type> o(block_text_inx.size(), 0);
         std::vector<size_type> c(block_text_inx.size(), 0);
@@ -273,6 +368,8 @@ public:
         counter.push_back(c);
         continue;
       }
+      // Iterate through the block pairs and add them to the pair hash table
+      // along with their index *if they are consecutive*
       for (uint64_t i = 0; i < block_text_inx.size() - 1; i++) {
         if (block_text_inx[i] + block_size == block_text_inx[i + 1] &&
             static_cast<uint64_t>(block_text_inx[i] + pair_size) <=
@@ -286,14 +383,18 @@ public:
           pairs[mh_pair].push_back(i);
         }
       }
-      // find pairs
+      // Find the occurrences of all block pairs' contents
       MersenneRabinKarp<input_type, size_type> rk_pair_sw =
           MersenneRabinKarp<input_type, size_type>(text, sigma_, 0, pair_size,
                                                    kPrime);
+      // Hash each window in the text of the size of a block pair
+      // and see if it corresponds to an actual block pair
       for (uint64_t i = 0; i < text.size() - pair_size; i++) {
         MersenneHash<input_type> mh_sw =
             MersenneHash<input_type>(text, rk_pair_sw.hash_, i, pair_size);
         if (pairs.find(mh_sw) != pairs.end()) {
+          // If the current hash corresponds to a hashed block pair,
+          // we update for those pairs, that they have an earlier occurrence
           for (auto b : pairs[mh_sw]) {
             if (i != static_cast<uint64_t>(block_text_inx[b])) {
               left[b] = 1;
@@ -308,18 +409,28 @@ public:
       auto new_block_size = block_size / this->tau_;
       std::vector<int64_t> new_blocks(0);
       for (uint64_t i = 0; i < block_text_inx.size(); i++) {
+        /// This is true <=> the current block is adjacent
+        /// to its predecessor and successor
         bool surrounded =
             (i > 0 && i < block_text_inx.size() - 1) &&
             block_text_inx[i] + old_block_size == block_text_inx[i + 1] &&
             block_text_inx[i - 1] + old_block_size == block_text_inx[i];
+        /// marked <=> not internal (ONLY HERE IT SEEMS)
         bool marked = false;
+        // if the block is adjacent to its predecessor and successor, then it
+        // must have a previous occurrence both as a left and right part of a
+        // block pair in order to be a back block.
+        // Otherwise, only consecutive neighboring blocks need to be considered.
         if (surrounded) {
           marked = left[i] && right[i];
         } else {
           marked = left[i] || right[i];
         }
+        // If either the block is internal or extends past the text end (i.e. is
+        // padded), then we create tau child nodes for this block
         if (!(marked) || static_cast<uint64_t>(block_text_inx[i] +
                                                old_block_size) >= text.size()) {
+          // This block is internal
           (*bv)[i] = 1;
           for (size_type j = 0; j < this->tau_; j++) {
             if (static_cast<uint64_t>(block_text_inx[i] +
@@ -332,33 +443,52 @@ public:
       MersenneRabinKarp<input_type, size_type> rk_first_occ =
           MersenneRabinKarp<input_type, size_type>(
               text, sigma_, block_text_inx[0], block_size, kPrime);
+      // Identify the first occurrence for each block on this level
       for (int64_t i = 0; static_cast<uint64_t>(i) < block_text_inx.size() - 1;
            i++) {
+        // This is true <=>
+        // This is not the last block,
+        // this block is adjacent to the next and
+        // the next block is internal
+        // We need this, because the hasher overlaps the next block as well.
         bool followed =
             (static_cast<uint64_t>(i) < block_text_inx.size() - 1) &&
             block_text_inx[i] + block_size == block_text_inx[i + 1] &&
             (*bv)[i + 1] == 1;
+        // If this block is internal
         if ((*bv)[i] == 1) {
+          // If the hasher's current position is currently not at the current
+          // block index, move it there
           if (rk_first_occ.init_ != static_cast<uint64_t>(block_text_inx[i])) {
             rk_first_occ.restart(block_text_inx[i]);
           }
           if (followed) {
+            // We iterate through every window that starts in this block
+            // and ends before the end of the text.
+            // j is the offset into the current block
             for (int64_t j = 0; j < block_size &&
                                 static_cast<uint64_t>(block_text_inx[i] + j +
                                                       block_size) < text.size();
                  j++) {
+              // Hash the window and try to find an earlier occurrence
               MersenneHash<input_type> mh_first_occ = MersenneHash<input_type>(
                   text, rk_first_occ.hash_, block_text_inx[i] + j, block_size);
               if (blocks.find(mh_first_occ) != blocks.end()) {
                 for (auto b : blocks[mh_first_occ]) {
-                  // b cant be i and if j>0 then b cant follow on i (j>0) -> b >
-                  // i + 1 (a -> b <=> not a or b)
+                  // The if the current block (b) were i, it would reference
+                  // itself. If j > 0 then the occurrence overlaps the block i
+                  // + 1. Therefore, in that case b must be a block *past* i+1
                   if (b > i && (j <= 0 || b > i + 1)) {
+                    // If all is well, set the back pointer and offsets
                     pointers[b] = i;
                     offsets[b] = j;
                     if ((*bv)[b] == 0) {
+                      // If b is a back block, then we have another block
+                      // pointing to i
                       counters[i]++;
                       if (j > 0) {
+                        // if the offset is greater than 0, the copied area
+                        // extends into the next block
                         counters[i + 1]++;
                       }
                     }
@@ -369,6 +499,7 @@ public:
               rk_first_occ.next();
             }
           } else {
+            // If the next block is not adjacent, we only hash once
             MersenneHash<input_type> mh_first_occ = MersenneHash<input_type>(
                 text, rk_first_occ.hash_, block_text_inx[i], block_size);
             if (blocks.find(mh_first_occ) != blocks.end()) {
@@ -383,6 +514,7 @@ public:
           }
         }
       }
+      // Add the values calculated on this level
       pass1_pointer.push_back(pointers);
       pass1_offset.push_back(offsets);
       counter.push_back(counters);
@@ -392,8 +524,11 @@ public:
       block_size = new_block_size;
       bv_marked.push_back(bv);
     }
+    // By this point, the first pass is done and we have an unpruned block tree
     this->leaf_size = block_size;
     block_size *= this->tau_;
+    // Prune the tree. Doing so will replace the pointers of pruned nodes with
+    // PRUNED
     pruning_extended(counter, pass1_pointer, pass1_offset, bv_marked,
                      bv_marked);
 
@@ -412,6 +547,7 @@ public:
     bool found_back_block =
         top_level.size() != static_cast<uint64_t>(ones_per_lvl[0]) ||
         bv_marked.size() == 1;
+    // If there is a back block on the first level, add its values to the tree
     if (found_back_block || !this->CUT_FIRST_LEVELS) {
       this->block_tree_types_.push_back(&top_level);
       this->block_tree_types_rs_.push_back(
@@ -436,11 +572,14 @@ public:
     } else {
       delete bv_marked[0];
     }
-    for (uint64_t i = 1; i < bv_marked.size(); i++) {
 
+    for (uint64_t i = 1; i < bv_marked.size(); i++) {
+      // If the previous level is padded, we need to be careful, since the last
+      // block possibly does not generate exactly tau children
       size_type new_size = (ones_per_lvl[i - 1] - is_padded) * this->tau_;
       auto last_block_parent = blk_lvl[i - 1][blk_lvl[i - 1].size() - 1];
       auto lvl_block_size = block_size_lvl_temp[i];
+      // Determine the number of children the last block generated
       if (is_padded) {
         for (uint64_t j = 0; j < static_cast<uint64_t>(this->tau_); j++) {
           if (last_block_parent + j * lvl_block_size < text.size()) {
@@ -448,23 +587,32 @@ public:
           }
         }
       }
+      // Check if we have found a back block on the current level
       found_back_block |= new_size != ones_per_lvl[i];
+      // If there is a back block, we add this level's data to the tree
       if (found_back_block || !this->CUT_FIRST_LEVELS) {
+        // is_internal
         auto bit_vector = new pasta::BitVector(new_size, 0);
         auto &bv_ref = *bit_vector;
         auto p = new sdsl::int_vector<>(bv_ref.size() - ones_per_lvl[i], 0);
         auto o = new sdsl::int_vector<>(bv_ref.size() - ones_per_lvl[i], 0);
         auto &ptr = *p;
         auto &off = *o;
+        // Maps block index => number of pruned blocks before this block
         std::unordered_map<size_type, size_type> blocks_skipped;
         auto &lvl_pass1 = *bv_marked[i];
+        // Number of non-pruned blocks so far
         size_type c = 0;
         size_type c_u = 0;
         for (uint64_t j = 0; j < lvl_pass1.size(); j++) {
           blocks_skipped[j] = j - c;
-          if (pass1_pointer[i][j] != -2) {
+          // If the current block is not pruned, add it to the new tree
+          if (pass1_pointer[i][j] != PRUNED) {
+            // Add it to the is_internal bit vector
             bv_ref[c] = (bool)lvl_pass1[j];
+            // If it is a back block, add its pointer and offset
             if (!lvl_pass1[j]) {
+              // We need to ignore the pruned blocks
               ptr[c_u] =
                   pass1_pointer[i][j] - blocks_skipped[pass1_pointer[i][j]];
               off[c_u] = pass1_offset[i][j];
@@ -473,6 +621,7 @@ public:
             c++;
           }
         }
+        // Add the new data to the tree
         this->block_tree_types_.push_back(&bv_ref);
         this->block_tree_types_rs_.push_back(
             new pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>(bv_ref));
@@ -482,15 +631,20 @@ public:
         this->block_tree_offsets_.push_back(o);
         this->block_size_lvl_.push_back(block_size_lvl_temp[i]);
       } else {
+        // Otherwise, we don't need the data from this level anymore
         delete bv_marked[i];
       }
     }
 
+    // Construct the leaf string
     int64_t leaf_count = 0;
     auto &last_level = (*bv_marked[bv_marked.size() - 1]);
     for (uint64_t i = 0; i < last_level.size(); i++) {
       if (last_level[i] == 1) {
+        // For every leaf on the last level, we have tau leaf blocks
         leaf_count += this->tau_;
+        // Iterate through all characters in this child and add them to the leaf
+        // string
         for (uint64_t j = 0;
              j < static_cast<uint64_t>(this->leaf_size * this->tau_); j++) {
           if (static_cast<uint64_t>(blk_lvl[blk_lvl.size() - 1][i] + j) <

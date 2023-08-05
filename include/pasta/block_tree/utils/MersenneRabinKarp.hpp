@@ -28,11 +28,16 @@ template <class T, class size_type> class MersenneRabinKarp {
   __extension__ typedef unsigned __int128 uint128_t;
 
 public:
+  /// The text being hashed
   std::vector<T> const &text_;
   uint128_t sigma_;
+  /// The start index of the currently hashed window
   uint64_t init_;
+  /// The window size of this hasher
   uint64_t length_;
+  /// A large prime used for modulus operations
   uint128_t prime_;
+  /// The current hash value
   uint64_t hash_;
   uint128_t max_sigma_;
 

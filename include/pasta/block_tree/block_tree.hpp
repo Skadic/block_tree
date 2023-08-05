@@ -38,6 +38,10 @@ namespace pasta {
 
 template <typename input_type, typename size_type> class BlockTree {
 public:
+  /// @brief If this is true, then the only levels of the tree start to be
+  ///   included starting at the first level that contains a back block
+  ///
+  /// For example, if levels 0 to 5 do not contain any back blocks, then the tree will only contain levels 6 and below. 
   bool CUT_FIRST_LEVELS = true;
   size_type tau_;
   size_type max_leaf_length_;
@@ -526,25 +530,57 @@ public:
     return 0;
   }
 
+  /// @brief Calculate the number of leading zeros for a 32-bit integer.
+  /// This value is capped at 31.
   inline size_type leading_zeros(int32_t val) {
     return __builtin_clz(static_cast<unsigned int>(val) | 1);
   }
 
+  /// @brief Calculate the number of leading zeros for a 64-bit integer.
+  /// This value is capped at 64.
   inline size_type leading_zeros(int64_t val) {
     return __builtin_clzll(static_cast<unsigned long long>(val) | 1);
   }
 
+  ///
+  /// @brief Determine the padding and minimum height and the size of the blocks
+  /// on the top level of a block tree with s top-level blocks and an arity of
+  /// tau with leaves also of size tau.
+  ///
+  /// The height is the number of levels in the tree.
+  /// The padding is the number of characters that the top-level exceeds the
+  /// text length. For example, if the result was that the top level consists of
+  /// s = 5 blocks of size 30 and the text size being 80, then the padding would
+  /// be (5 * 30) - 80 = 70.
+  ///
+  /// @param[out] padding The number of characters in the last block (of the
+  ///   first level of the tree) that are empty.
+  /// @param[in] text_length The number of characters in the input string.
+  /// @param[out] height The number of levels in the tree.
+  /// @param[out] blk_size The size of blocks on the first level of the tree.
+  ///
   void calculate_padding(int64_t &padding, int64_t text_length, int64_t &height,
                          int64_t &blk_size) {
+    // This is the number of characters occupied by a tree with s*tau^h levels
+    // and leaves of size tau. At the start, we only have a tree with the first
+    // level with s leaf blocks which each have size tau. If we insert another
+    // level, the number of leaf blocks (and therefore the number of occupied
+    // characters) increases by a factor of tau.
     int64_t tmp_padding = this->s_ * this->tau_;
     int64_t h = 1;
+    // Size of the blocks on the current level (starting at the leaf level)
     blk_size = tau_;
+    // While the tree does not cover the entire text, add a level
     while (tmp_padding < text_length) {
       tmp_padding *= this->tau_;
       blk_size *= this->tau_;
       h++;
     }
+    // once the tree has enough levels to cover the entire text, we set the
+    // tree's values
     height = h;
+    // The padding is the number of excess characters that the block tree covers
+    // over the length of the text.
     padding = tmp_padding - text_length;
   }
 
