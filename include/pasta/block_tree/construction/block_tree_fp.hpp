@@ -338,7 +338,7 @@ public:
       std::vector<size_type> pointers(block_text_inx.size(), NO_FORMER_OCC);
       std::vector<size_type> offsets(block_text_inx.size(), 0);
       std::vector<size_type> counters(block_text_inx.size(), 0);
-      // If a block pairs are larger than the whole text, then there is
+      // If a block pair is larger than the whole text, then there is
       // nothing really to do on this level. There cannot be any back pointers
       if (static_cast<uint64_t>(pair_size) > text.size()) {
         block_size /= this->tau_;
@@ -603,6 +603,7 @@ public:
         auto &lvl_pass1 = *bv_marked[i];
         // Number of non-pruned blocks so far
         size_type c = 0;
+        // 
         size_type c_u = 0;
         for (uint64_t j = 0; j < lvl_pass1.size(); j++) {
           blocks_skipped[j] = j - c;

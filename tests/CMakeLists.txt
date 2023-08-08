@@ -35,6 +35,7 @@ include(CTest)
 
 find_package(GTest REQUIRED)
 pasta_block_tree_build_test(block_tree/block_tree_fp_test)
+pasta_block_tree_build_test(block_tree/block_tree_seq_test)
 pasta_block_tree_build_test(block_tree/block_tree_lpf_test)
 pasta_block_tree_build_test(block_tree/block_tree_lpf_parallel_test)
 

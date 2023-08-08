@@ -41,7 +41,8 @@ public:
   /// @brief If this is true, then the only levels of the tree start to be
   ///   included starting at the first level that contains a back block
   ///
-  /// For example, if levels 0 to 5 do not contain any back blocks, then the tree will only contain levels 6 and below. 
+  /// For example, if levels 0 to 5 do not contain any back blocks, then the
+  /// tree will only contain levels 6 and below.
   bool CUT_FIRST_LEVELS = true;
   size_type tau_;
   size_type max_leaf_length_;
@@ -95,7 +96,7 @@ public:
       off = off % block_size;
       blk_pointer = lvl_rs.rank1(blk_pointer) * tau_ + child;
     }
-    return compressed_leaves_[blk_pointer * leaf_size + off];
+    return decompress_map_[compressed_leaves_[blk_pointer * leaf_size + off]];
   };
 
   int64_t select(input_type c, size_type j) {
@@ -405,12 +406,14 @@ public:
 
   void compress_leaves() {
     compress_map_.resize(256, 0);
+    decompress_map_.resize(256, 0);
     for (size_t i = 0; i < this->leaves_.size(); ++i) {
       compress_map_[this->leaves_[i]] = 1;
     }
-    for (size_t i = 0, cur_val = 0; i < this->compress_map_.size(); ++i) {
-      size_t tmp = compress_map_[i];
-      compress_map_[i] = cur_val;
+    for (size_t c = 0, cur_val = 0; c < this->compress_map_.size(); ++c) {
+      size_t tmp = compress_map_[c];
+      compress_map_[c] = cur_val;
+      decompress_map_[cur_val] = c;
       cur_val += tmp;
     }
 
@@ -683,7 +686,7 @@ public:
     return result;
   }
 
-  size_type map_unique_chars(std::vector<input_type> &text) {
+  size_type map_unique_chars(const std::vector<input_type> &text) {
     this->u_chars_ = 0;
     input_type i = 0;
     for (auto a : text) {

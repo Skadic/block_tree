@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include "pasta/block_tree/utils/MersenneHash.hpp"
 #include <iostream>
 
 namespace pasta {
@@ -83,6 +84,10 @@ public:
     //        uint128_t i = (k & prime_) + (k >> power_);
     //        return (i >= prime_) ? i - prime_ : i;
   };
+
+  inline MersenneHash<T> current_hash() const {
+    return MersenneHash<T>(text_, hash_, init_, length_);
+  }
 
   void next() {
     if (text_.size() <= init_ + length_) {
