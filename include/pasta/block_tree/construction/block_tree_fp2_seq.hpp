@@ -125,39 +125,14 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
-      std::cout << "level " << level << ": " << std::endl;
-      auto begin = std::chrono::high_resolution_clock ::now();
       LevelData &current = levels.back();
-      /*
-      const bool last_block_padded =
-          block_starts.back() + block_size == text_len;
-      */
-
       scan_block_pairs(text, current, is_padded);
-      const auto scan_block_pair_time =
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::high_resolution_clock ::now() - begin)
-              .count();
-      begin = std::chrono::high_resolution_clock ::now();
       scan_blocks(text, current, is_padded);
-      const auto scan_block_time =
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::high_resolution_clock ::now() - begin)
-              .count();
-      begin = std::chrono::high_resolution_clock ::now();
 
       // Generate the next level (if we're not at the last level)
       if (level < static_cast<size_t>(tree_height) - 1) {
         levels.push_back(generate_next_level(text, current));
       }
-      const auto generate_time =
-          std::chrono::duration_cast<std::chrono::milliseconds>(
-              std::chrono::high_resolution_clock ::now() - begin)
-              .count();
-
-      std::cout << "pair: " << scan_block_pair_time
-                << "ms, block: " << scan_block_time
-                << "ms, next: " << generate_time << "ms" << std::endl;
     }
 
     make_tree(text, levels, padding);

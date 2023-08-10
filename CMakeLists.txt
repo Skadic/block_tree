@@ -33,10 +33,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON CACHE INTERNAL "")
 option(PASTA_BLOCK_TREE_BUILD_TESTS
         "Build blocktree's tests." OFF)
 option(PASTA_BLOCK_TREE_BUILD_EXAMPLES
-  "Build blocktree's benchmarks." OFF)
+        "Build blocktree's benchmarks." OFF)
 
 # Optional test
-if(PASTA_BLOCK_TREE_BUILD_TESTS)
+if (PASTA_BLOCK_TREE_BUILD_TESTS)
     include(FetchContent)
     FetchContent_Declare(
             googletest
@@ -48,13 +48,13 @@ if(PASTA_BLOCK_TREE_BUILD_TESTS)
     enable_testing()
     add_subdirectory(tests)
     include(GoogleTest)
-endif()
-if(PASTA_BLOCK_TREE_BUILD_EXAMPLES)
-  add_executable(example
-    examples/block_tree_construction.cpp)
-  target_link_libraries(example
-    pasta_block_tree)
-endif()
+endif ()
+if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
+    add_executable(example
+            examples/block_tree_construction.cpp)
+    target_link_libraries(example
+            pasta_block_tree)
+endif ()
 
 set(LIBSAIS_USE_OPENMP ON CACHE BOOL "Use OpenMP for parallelization of libsais" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
@@ -63,12 +63,12 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
 
 add_library(pasta_block_tree INTERFACE)
 target_include_directories(pasta_block_tree INTERFACE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 target_link_libraries(pasta_block_tree INTERFACE
-  libsais
-  pasta_bit_vector
-  sdsl
-  tlx)
+        libsais
+        pasta_bit_vector
+        sdsl
+        tlx)
 
 ################################################################################

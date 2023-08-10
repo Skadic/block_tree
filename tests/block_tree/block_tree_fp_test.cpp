@@ -25,16 +25,14 @@
 #include <gtest/gtest.h>
 
 #include <pasta/block_tree/construction/block_tree_fp.hpp>
-#include <pasta/block_tree/utils/lpf_array.hpp>
 
 class BlockTreeFPTest : public ::testing::Test {
 
 protected:
-
   std::vector<uint8_t> text;
 
-  pasta::BlockTreeFP<uint8_t, int32_t>* bt;
-  
+  pasta::BlockTreeFP<uint8_t, int32_t> *bt;
+
   void SetUp() override {
 
     std::random_device rd;
@@ -46,15 +44,12 @@ protected:
     for (size_t i = 0; i < text.size(); ++i) {
       text[i] = dist(gen);
     }
-      
+
     bt = pasta::make_block_tree_fp<uint8_t, int32_t>(text, 2, 1);
     bt->add_rank_support();
   }
 
-  void TearDown() override {
-    delete bt;
-  }
-
+  void TearDown() override { delete bt; }
 };
 
 TEST_F(BlockTreeFPTest, access) {
@@ -81,9 +76,9 @@ TEST_F(BlockTreeFPTest, select) {
   }
 }
 
-int main(int argc, char** argv) {
-    ::testing::InitGoogleTest(&argc, argv);
-    return RUN_ALL_TESTS();
+int main(int argc, char **argv) {
+  ::testing::InitGoogleTest(&argc, argv);
+  return RUN_ALL_TESTS();
 }
 
 /******************************************************************************/
