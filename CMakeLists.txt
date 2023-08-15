@@ -46,14 +46,20 @@ if (PASTA_BLOCK_TREE_BUILD_TESTS)
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
     FetchContent_MakeAvailable(googletest)
     enable_testing()
-    add_subdirectory(tests)
     include(GoogleTest)
+    add_subdirectory(tests)
 endif ()
 if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
-    add_executable(example
+    add_executable(block_tree_construction
             examples/block_tree_construction.cpp)
-    target_link_libraries(example
+    target_link_libraries(block_tree_construction
             pasta_block_tree)
+
+    add_executable(build_bt
+            examples/build_bt.cpp)
+    target_link_libraries(build_bt
+            pasta_block_tree)
+
 endif ()
 
 set(LIBSAIS_USE_OPENMP ON CACHE BOOL "Use OpenMP for parallelization of libsais" FORCE)

@@ -20,11 +20,13 @@
 
 #pragma once
 
+#include <concepts>
+#include <memory>
+
 #include "pasta/bit_vector/bit_vector.hpp"
 #include "pasta/block_tree/block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
-#include <memory>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 
@@ -32,13 +34,13 @@ __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
 
-template <typename input_type, typename size_type>
+template <std::integral input_type, std::signed_integral size_type>
 class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
   constexpr static size_type NO_EARLIER_OCC = -1;
   constexpr static size_type PRUNED = -2;
 
-  static constexpr size_t SIGMA = 256;
+  static constexpr size_type SIGMA = 256;
   static constexpr uint128_t K_PRIME = 2305843009213693951ULL;
 
   using BitVector = pasta::BitVector;
@@ -49,10 +51,10 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
             typename hash_type = std::hash<key_type>>
   using HashMap = std::unordered_map<key_type, value_type, hash_type>;
 
-  // using RabinKarp = MersenneRabinKarp<input_type, size_type>;
-  using RabinKarp = MersenneRabinKarp<uint8_t, size_t>;
-  // using RabinKarpHash = MersenneHash<input_type>;
-  using RabinKarpHash = MersenneHash<uint8_t>;
+  using RabinKarp = MersenneRabinKarp<input_type, size_type>;
+  // using RabinKarp = MersenneRabinKarp<uint8_t, size_t>;
+  using RabinKarpHash = MersenneHash<input_type>;
+  // using RabinKarpHash = MersenneHash<uint8_t>;
 
   template <typename value_type>
   using RabinKarpMap = HashMap<RabinKarpHash, value_type>;
@@ -72,14 +74,14 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     /// Block start indices
     std::unique_ptr<std::vector<size_type>> block_starts;
     /// The block size on this level
-    size_t block_size;
+    size_type block_size;
     /// The index of the current level. First level is 0, second level is 1 etc.
-    size_t level_index;
+    size_type level_index;
     /// The number of blocks on the current level
-    size_t num_blocks;
+    size_type num_blocks;
 
-    inline LevelData(size_t level_index_, size_t block_size_,
-                     size_t num_blocks_)
+    inline LevelData(size_type level_index_, size_type block_size_,
+                     size_type num_blocks_)
         : is_internal(nullptr), is_internal_rank(nullptr),
           pointers(new std::vector<size_type>()),
           offsets(new std::vector<size_type>()),
@@ -89,7 +91,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     /// @brief Checks whether a block is adjacent in the text
     ///   to its successor on this level
-    [[nodiscard]] inline bool is_adjacent(size_t i) const {
+    [[nodiscard]] inline bool is_adjacent(size_type i) const {
       assert(i < num_blocks - 1);
       return (*block_starts)[i] + static_cast<size_type>(block_size) ==
              (*block_starts)[i + 1];
@@ -97,8 +99,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   };
 
   void construct(const std::vector<input_type> &text) {
-
-    const size_t text_len = text.size();
+    const size_type text_len = text.size();
     /// The number of characters a block tree with s top-level blocks and arity
     /// of strictly tau would exceed over the text size
     int64_t padding;
@@ -117,7 +118,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     levels.emplace_back(0, top_block_size, text_len / top_block_size);
     LevelData &top_level = levels.back();
     top_level.block_starts->reserve(ceil_div(text_len, top_level.block_size));
-    for (uint64_t i = 0; i < text_len; i += top_level.block_size) {
+    for (size_type i = 0; i < text_len; i += top_level.block_size) {
       top_level.block_starts->push_back(i);
     }
     top_level.block_size = top_block_size;
@@ -131,17 +132,21 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
       // Generate the next level (if we're not at the last level)
       if (level < static_cast<size_t>(tree_height) - 1) {
-        levels.push_back(generate_next_level(text, current));
+        levels.push_back(std::move(generate_next_level(text, current)));
       }
     }
 
+    prune(levels);
     make_tree(text, levels, padding);
   }
 
   /// @brief Returns the ceiling of x / y for x > 0;
   ///
   /// https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-  inline size_t ceil_div(size_t x, size_t y) { return 1 + ((x - 1) / y); }
+
+  inline size_t ceil_div(std::integral auto x, std::integral auto y) {
+    return 1 + ((x - 1) / y);
+  }
 
   /// Scan through the blocks pairwise in order to identify which blocks should
   /// be replaced with back blocks.
@@ -150,8 +155,9 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @param level The data for the current level.
   ///
   /// @return The block start indices for the next level of the tree
-  void scan_block_pairs(const std::vector<uint8_t> &text, LevelData &level,
-                        const bool is_padded) {
+  __attribute__((noinline)) void
+  scan_block_pairs(const std::vector<input_type> &text, LevelData &level,
+                   const bool is_padded) {
     const size_t block_size = level.block_size;
     const size_t num_blocks = level.num_blocks;
     const size_t pair_size = 2 * block_size;
@@ -164,7 +170,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     // A map containing hashed block pairs mapped to their indices of the
     // pairs' first block respectively
-    RabinKarpMap<std::vector<uint32_t>> map(num_blocks - 1);
+    RabinKarpMap<std::vector<size_type>> map(num_blocks - 1);
 
     // Set up the packed array holding the markings for each block.
     // Each mark is a 2-bit number.
@@ -191,7 +197,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     // previous occurrences.
     RabinKarp rk(text, SIGMA, 0, pair_size, K_PRIME);
     for (size_t i = 0; i < num_blocks - 1 - is_padded; ++i) {
-      if (!level.is_adjacent(i)) {
+      if (!level.is_adjacent(i) | !level.is_adjacent(i + 1)) {
         continue;
       }
       scan_windows_in_block_pair(rk, map, markings, block_size);
@@ -209,6 +215,142 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     level.is_internal_rank = std::make_unique<Rank>(is_internal);
   }
 
+  /// @brief Scan through the windows starting in a block and mark them
+  /// accordingly if they represent the earliest occurrence of some block hash.
+  ///
+  /// The supplied `RabinKarp` hasher must be at the start of the block.
+  /// @param rk A Rabin-Karp hasher whose state is at the start of the block.
+  /// @param map The map containing the hashes of block pairs mapped to their
+  ///   index.
+  /// @param markings A vector storing the marks on a block. Marks are 2-bit
+  ///   integers.
+  ///   If the MSB is set, that means that the content of the block and its
+  ///   successor has an earlier occurrence. If the LSB being set means that
+  ///   the content of the block and its predecessor has an earlier occurrence.
+  /// @param block_size The size of blocks on the current level.
+  static inline void scan_windows_in_block_pair(
+      RabinKarp &rk, RabinKarpMap<std::vector<size_type>> &map,
+      sdsl::int_vector<2> &markings, const size_t block_size) {
+    for (size_t offset = 0; offset < block_size; ++offset, rk.next()) {
+      RabinKarpHash current_hash = rk.current_hash();
+      // Find the hash of the current window among the hashed block pairs.
+      auto found_hash_ptr = map.find(current_hash);
+      if (found_hash_ptr == map.end()) {
+        continue;
+      }
+      auto &[block_pair_hash, block_indices] = *found_hash_ptr;
+
+      // If the hash we found is just the first block pair in the hash map,
+      // then the first block pair has no earlier occurrence.
+      // So we want to skip that one
+      bool skip_first = current_hash.start_ == block_pair_hash.start_;
+
+      // For all pairs with an earlier occurrence,
+      for (size_t i = skip_first; i < block_indices.size(); i++) {
+        auto block_index = block_indices[i];
+        markings[block_index] = markings[block_index] | 0b10;
+        markings[block_index + 1] = markings[block_index + 1] | 0b01;
+      }
+      map.erase(found_hash_ptr);
+    }
+  }
+
+  /// @brief Determine the positions for each block's earliest occurrence if
+  /// there is any.
+  ///
+  /// @param s
+  /// @param level_data
+  /// @param is_padded
+  /// @return
+  __attribute__((noinline)) auto scan_blocks(const std::vector<input_type> &s,
+                                             LevelData &level_data,
+                                             const bool is_padded) {
+    const size_t block_size = level_data.block_size;
+    const size_t num_blocks = level_data.num_blocks;
+    const std::vector<size_type> &block_starts = *level_data.block_starts;
+
+    level_data.pointers =
+        std::make_unique<std::vector<size_type>>(num_blocks, NO_EARLIER_OCC);
+    level_data.offsets =
+        std::make_unique<std::vector<size_type>>(num_blocks, 0);
+    level_data.counters =
+        std::make_unique<std::vector<size_type>>(num_blocks, 0);
+
+    if (num_blocks <= 2) {
+      return;
+    }
+
+    // A map with hashed slices as keys, which map to a vector of links,
+    // describing a link between a (potential) back block to their source block.
+    // In addition to the vector, there is a boolean which denotes whether a
+    // hash has already been processed
+    RabinKarpMap<std::vector<size_type>> links(num_blocks);
+    for (size_t i = 0; i < num_blocks - is_padded; ++i) {
+      const RabinKarpHash hash =
+          RabinKarp(s, SIGMA, block_starts[i], block_size, K_PRIME)
+              .current_hash();
+      links[hash].push_back(i);
+    }
+
+    // Hash every window and find the first occurrences for every block.
+    RabinKarp rk(s, SIGMA, block_starts[0], block_size, K_PRIME);
+    for (size_t current_block_index = 0;
+         current_block_index < num_blocks - is_padded - 1;
+         ++current_block_index) {
+
+      if (static_cast<int64_t>(rk.init_) != block_starts[current_block_index]) {
+        rk.restart(block_starts[current_block_index]);
+      }
+
+      scan_windows_in_block(rk, links, level_data, current_block_index);
+    }
+  }
+  /// \brief Scans through block-sized windows starting inside one block and
+  ///     tries to find earlier occurrences of blocks. Non-internal blocks will
+  ///     have their respective m_source_blocks and m_offsets entries populated.
+  /// \param rk A Rabin-Karp hasher whose current state is at a block start.
+  /// \param links A map whose keys are hashed blocks and the values
+  ///   are all block indices of blocks matching the hash in ascending order.
+  /// \param current_block_internal_index The index of the block which the
+  ///   Rabin-Karp hasher is situated in only with respect to *internal blocks*
+  ///   on the current level, disregarding back blocks.
+  /// \param num_hashes The number of times the Rabin-Karp hasher should hash.
+  __attribute__((noinline)) static void scan_windows_in_block(
+      RabinKarp &rk, RabinKarpMap<std::vector<size_type>> &links,
+      LevelData &level_data, const size_t current_block_index) {
+    const BitVector &is_internal = *level_data.is_internal;
+    for (size_type offset = 0; offset < level_data.block_size;
+         ++offset, rk.next()) {
+      const RabinKarpHash current_hash = rk.current_hash();
+      // Find all blocks in the multimap that match our hash
+      auto found = links.find(current_hash);
+      if (found == links.end()) {
+        continue;
+      }
+      const auto &[block_hash, found_blocks] = *found;
+      const size_t num_found_blocks = found_blocks.size();
+      // In this case, we are hashing an actual block right now (not just an
+      // arbitrary window). As a result, the first block in the vector is the
+      // block we are currently hashing in
+      const size_t skip_first =
+          block_hash.start_ == current_hash.start_ ? 1 : 0;
+      for (size_t i = skip_first; i < num_found_blocks; ++i) {
+        const size_type block_index = found_blocks[i];
+        (*level_data.pointers)[block_index] = current_block_index;
+        (*level_data.offsets)[block_index] = offset;
+        // We increment the counter for the block that is being pointed to
+        // if the current block is actually a back block
+        // If the offset is greater than 0,
+        // then it also overlaps into the next block
+        const size_t is_internal_block = is_internal[block_index] == 0 ? 1 : 0;
+        (*level_data.counters)[current_block_index] += 1;
+        (*level_data.counters)[current_block_index + 1] +=
+            is_internal_block & (offset > 0);
+      }
+      links.erase(found);
+    }
+  }
+
   /// @brief Generate the block size, number of block and block start indices
   /// for the next level.
   ///
@@ -218,8 +360,9 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @param text The input text.
   /// @param level The level data of the previous level.
   /// @return The level data of the next level.
-  [[nodiscard]] LevelData generate_next_level(const std::vector<uint8_t> &text,
-                                              const LevelData &level) const {
+  [[nodiscard]] LevelData
+  generate_next_level(const std::vector<input_type> &text,
+                      const LevelData &level) const {
     const size_t block_size = level.block_size;
     const size_t num_blocks = level.num_blocks;
     const auto &is_internal = *level.is_internal;
@@ -250,170 +393,31 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     return next_level;
   }
 
-  /// @brief Scan through the windows starting in a block and mark them
-  /// accordingly if they represent the earliest occurrence of some block hash.
-  ///
-  /// The supplied `RabinKarp` hasher must be at the start of the block.
-  /// @param rk A Rabin-Karp hasher whose state is at the start of the block.
-  /// @param map The map containing the hashes of block pairs mapped to their
-  /// index.
-  /// @param markings A vector storing the marks on a block. Marks are 2-bit
-  ///   integers.
-  ///   If the MSB is set, that means that the content of the block and its
-  ///   successor has an earlier occurrence. If the LSB being set means that
-  ///   the content of the block and its predecessor has an earlier occurrence.
-  /// @param block_size The size of blocks on the current level.
-  static inline void scan_windows_in_block_pair(
-      RabinKarp &rk, RabinKarpMap<std::vector<uint32_t>> &map,
-      sdsl::int_vector<2> &markings, const size_t block_size) {
-    for (size_t offset = 0; offset < block_size; ++offset) {
-      RabinKarpHash current_hash = rk.current_hash();
-      // Find the hash of the current window among the hashed block pairs.
-      auto found_hash_ptr = map.find(current_hash);
-      if (found_hash_ptr == map.end()) {
-        continue;
-      }
-      auto &[block_pair_hash, block_indices] = *found_hash_ptr;
-
-      // If the hash we found is just the first block pair in the hash map,
-      // then the first block pair has no earlier occurrence.
-      // So we want to skip that one
-      bool skip_first = current_hash.start_ == block_pair_hash.start_;
-
-      // For all pairs with an earlier occurrence,
-      for (size_t i = skip_first; i < block_indices.size(); i++) {
-        auto block_index = block_indices[i];
-        markings[block_index] = markings[block_index] | 0b10;
-        markings[block_index + 1] = markings[block_index + 1] | 0b01;
-      }
-      map.erase(found_hash_ptr);
-      rk.next();
-    }
-  }
-
-  /// @return The block start indices for the *next* level.
-  auto scan_blocks(const std::vector<input_type> &s, LevelData &level_data,
-                   const bool is_padded) {
-    const size_t block_size = level_data.block_size;
-    const size_t num_blocks = level_data.num_blocks;
-    const std::vector<size_type> &block_starts = *level_data.block_starts;
-
-    const BitVector &is_internal = *level_data.is_internal;
-
-    level_data.pointers =
-        std::make_unique<std::vector<size_type>>(num_blocks, NO_EARLIER_OCC);
-    level_data.offsets =
-        std::make_unique<std::vector<size_type>>(num_blocks, 0);
-
-    // A map with hashed slices as keys, which map to a vector of links,
-    // describing a link between a (potential) back block to their source block.
-    // In addition to the vector, there is a boolean which denotes whether a
-    // hash has already been processed
-    RabinKarpMap<std::pair<bool, std::vector<size_type>>> links(num_blocks - 1);
-    for (size_t i = 0; i < num_blocks - is_padded; ++i) {
-      const RabinKarpHash hash =
-          RabinKarp(s, SIGMA, block_starts[i], block_size, K_PRIME)
-              .current_hash();
-      auto entry = links.insert({hash, {false, {}}});
-      auto &[found_hash, pair] = *entry.first;
-      auto &[was_handled, vec] = pair;
-      vec.emplace_back(i);
-    }
-
-    // Hash every window and find the first occurrences for every block.
-    RabinKarp rk(s, SIGMA, 0, block_size, K_PRIME);
-    for (size_t current_block_index = 0;
-         current_block_index < num_blocks - is_padded; ++current_block_index) {
-      // We can skip this loop iteration if the current block is a back block
-      // Nothing is ever going to point to this anyway.
-      if (!is_internal[current_block_index]) {
-        continue;
-      }
-
-      if (static_cast<int64_t>(rk.init_) != block_starts[current_block_index]) {
-        rk.restart(block_starts[current_block_index]);
-      }
-
-      // This is true iff there exists a next block and it is not adjacent
-      const bool next_block_not_adjacent =
-          current_block_index < num_blocks - 1 &&
-          !level_data.is_adjacent(current_block_index);
-      // If the next block is not adjacent, we just want to hash exactly this
-      // block. If it either is adjacent or we are at the end of the string, we
-      // take care not to hash windows that start beyond the end of the string
-      const size_t num_hashes =
-          next_block_not_adjacent
-              ? 1
-              : block_size - saturating_sub(block_starts[current_block_index] +
-                                                block_size,
-                                            s.size());
-
-      scan_windows_in_block(rk, links, level_data, current_block_index,
-                            num_hashes);
-      ++current_block_index;
-    }
-  }
-
-  /// \brief Scans through block-sized windows starting inside one block and
-  ///     tries to find earlier occurrences of blocks. Non-internal blocks will
-  ///     have their respective m_source_blocks and m_offsets entries populated.
-  /// \param rk A Rabin-Karp hasher whose current state is at a block start.
-  /// \param links A map whose keys are hashed blocks and the values
-  ///   are all block indices of blocks matching the hash in ascending order.
-  /// \param current_block_internal_index The index of the block which the
-  ///   Rabin-Karp hasher is situated in only with respect to *internal blocks*
-  ///   on the current level, disregarding back blocks.
-  /// \param num_hashes The number of times the Rabin-Karp hasher should hash.
-  static void scan_windows_in_block(
-      RabinKarp &rk,
-      RabinKarpMap<std::pair<bool, std::vector<size_type>>> &links,
-      LevelData &level_data, const size_t current_block_index,
-      const size_t num_hashes) {
-    for (size_t offset = 0; offset < num_hashes; ++offset) {
-      const RabinKarpHash current_hash = rk.current_hash();
-      // Find all blocks in the multimap that match our hash
-      auto found = links.find(current_hash);
-      // Only handle this hash if it does not exist and we have not handled it
-      // already
-      auto &[hash_is_handled, found_blocks] = found->second;
-      if (found == links.end() || hash_is_handled) {
-        continue;
-      }
-      const size_t num_found_blocks = found_blocks.size();
-      for (size_t i = 1; i < num_found_blocks; ++i) {
-        int block_index = found_blocks[i];
-        // link.source_block_index = current_block_index;
-        // link.offset             = offset;
-        //  There is only space for non-internal blocks in these vectors
-        // if (!is_internal[link.block_index]) {
-        //  Get the index of the back block only considering back blocks
-        // const size_t back_block_index   =
-        // is_internal_rank.rank0(link.block_index);
-        (*level_data.pointers)[block_index] = current_block_index;
-        (*level_data.offsets)[block_index] = offset;
-        //}
-      }
-      // We handled this hash, so we mark it as such
-      hash_is_handled = true;
-      // links.erase(found);
-      rk.next();
-    }
-  }
-
   ///
   /// @brief Takes a vector of levels and fills the block tree fields with them.
   ///
   /// @param[in] levels A vector containing data for each level, with the first
   /// entry corresponding to the topmost level.
   ///
-  void make_tree(std::vector<input_type> text, std::vector<LevelData> &levels,
-                 int64_t padding) {
+  void make_tree(const std::vector<input_type> &text,
+                 std::vector<LevelData> &levels, int64_t padding) {
     const bool is_padded = padding > 0;
 
-    // TODO Maybe only create this if there is a back block
+    std::vector<size_t> new_num_internal(levels.size(), 0);
+    for (size_t level = 0; level < levels.size(); level++) {
+      for (size_type block = 0; block < levels[level].num_blocks; block++) {
+        if ((*levels[level].is_internal)[block]) {
+          new_num_internal[level]++;
+        }
+      }
+    }
+
     // Create first level
-    {
-      LevelData &top_level = levels.front();
+    bool found_back_block =
+        levels[0].is_internal->size() == new_num_internal[0] ||
+        !this->CUT_FIRST_LEVELS;
+    LevelData &top_level = levels.front();
+    if (found_back_block) {
       const size_t n = top_level.num_blocks;
       const size_t num_internal = top_level.is_internal_rank->rank1(n);
       auto pointers = new sdsl::int_vector<>(n - num_internal, 0);
@@ -435,80 +439,29 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       this->block_tree_pointers_.push_back(pointers);
       this->block_tree_offsets_.push_back(offsets);
       this->block_size_lvl_.push_back(top_level.block_size);
-
-      top_level.pointers.reset();
-      top_level.offsets.reset();
-      top_level.counters.reset();
     }
+    top_level.pointers.reset();
+    top_level.offsets.reset();
+    top_level.counters.reset();
+
     // Add level data to the tree
     for (size_t level_index = 1; level_index < levels.size(); level_index++) {
-      LevelData &previous_level = levels[level_index - 1];
-      size_type previous_level_num_blocks = previous_level.num_blocks;
       LevelData &level = levels[level_index];
-      size_type new_size =
-          (previous_level.is_internal_rank->rank1(previous_level_num_blocks) -
-           is_padded) *
-          this->tau_;
-      previous_level.is_internal.reset();
-      previous_level.is_internal_rank.reset();
-      // Determine the number of children the last block generated
-      if (is_padded) {
-        const size_type last_block_parent_start =
-            previous_level.block_starts->back();
-        const size_type block_size = level.block_size;
-        for (uint64_t i = 0; i < static_cast<uint64_t>(this->tau_); i++) {
-          // Count the number of blocks that still start before the text end
-          new_size += last_block_parent_start + i * block_size < text.size();
-        }
+      LevelData &previous_level = levels[level_index - 1];
+
+      found_back_block |= levels[level_index].is_internal->size() ==
+                          new_num_internal[level_index];
+      if (!found_back_block) {
+        level.pointers.reset();
+        level.offsets.reset();
+        level.counters.reset();
+        previous_level.is_internal.reset();
+        previous_level.is_internal_rank.reset();
+        continue;
       }
-      previous_level.block_starts.reset();
-      const size_t n = level.num_blocks;
-      // TODO This will break once pruning is implemented.
-      //  Instead of using rank, the number of ones after pruning should be
-      //  saved in a vec for example
-      const size_t num_internal = level.is_internal_rank->rank1(n);
-      auto is_internal = new BitVector(level.num_blocks);
-      auto pointers = new sdsl::int_vector<>(n - num_internal, 0);
-      auto offsets = new sdsl::int_vector<>(n - num_internal, 0);
-      size_t num_non_pruned = 0;
-      size_t num_back_blocks = 0;
 
-      // We will reuse the allocated memory of the pointers vector to store
-      // the number of pruned blocks before the block.
-      // The invariant is that all values up to i are overwritten while all
-      // values starting after i will still be valid pointers
-      std::vector<size_type> &num_blocks_skipped = *level.pointers;
-      for (size_t i = 0; i < level.num_blocks; i++) {
-        const size_type ptr = (*level.pointers)[i];
-        num_blocks_skipped[i] = i - num_non_pruned;
-
-        // If the current block is not pruned, add it to the new tree
-        if (ptr == PRUNED) {
-          continue;
-        }
-
-        // Add it to the is_internal bit vector
-        const bool block_is_internal = (*level.is_internal)[i];
-        (*is_internal)[num_non_pruned] = block_is_internal;
-        num_non_pruned++;
-
-        if (block_is_internal) {
-          continue;
-        }
-        // If it is a back block, add its pointer and offset
-        const size_t offset = (*level.offsets)[i];
-
-        (*pointers)[num_back_blocks] = ptr - num_blocks_skipped[ptr];
-        (*offsets)[num_back_blocks] = offset;
-        num_back_blocks++;
-      }
-      sdsl::util::bit_compress(*pointers);
-      sdsl::util::bit_compress(*offsets);
-      this->block_tree_types_.push_back(is_internal);
-      this->block_tree_types_rs_.push_back(new Rank(*is_internal));
-      this->block_tree_pointers_.push_back(pointers);
-      this->block_tree_offsets_.push_back(offsets);
-      this->block_size_lvl_.push_back(level.block_size);
+      make_tree_level(levels, new_num_internal, level_index, is_padded,
+                      text.size());
 
       // We don't need these anymore
       level.pointers.reset();
@@ -542,6 +495,176 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     this->compress_leaves();
   }
 
+  /// @brief Generates a level and adds the relevant data to the block tree.
+  /// @param levels The vector of levels of the tree.
+  /// @param level_index The index of the level to generate.
+  /// @param is_padded Whether there is padding in the last block of the tree
+  void make_tree_level(std::vector<LevelData> &levels,
+                       std::vector<size_t> &new_num_internal,
+                       const size_t level_index, const bool is_padded,
+                       const size_t text_len) {
+    LevelData &previous_level = levels[level_index - 1];
+    LevelData &level = levels[level_index];
+
+    const size_type previous_level_num_blocks = previous_level.num_blocks;
+    size_type new_size =
+        (previous_level.is_internal_rank->rank1(previous_level_num_blocks) -
+         is_padded) *
+        this->tau_;
+    previous_level.is_internal.reset();
+    previous_level.is_internal_rank.reset();
+    // Determine the number of children the last block generated
+    if (is_padded) {
+      const size_type last_block_parent_start =
+          previous_level.block_starts->back();
+      const size_type block_size = level.block_size;
+      for (uint64_t i = 0; i < static_cast<uint64_t>(this->tau_); i++) {
+        // Count the number of blocks that still start before the text end
+        new_size += last_block_parent_start + i * block_size < text_len;
+      }
+    }
+    previous_level.block_starts.reset();
+    const size_t n = level.num_blocks;
+    const size_t num_internal = new_num_internal[level_index];
+    auto is_internal = new BitVector(level.num_blocks);
+    auto pointers = new sdsl::int_vector<>(n - num_internal, 0);
+    auto offsets = new sdsl::int_vector<>(n - num_internal, 0);
+    size_t num_non_pruned = 0;
+    size_t num_back_blocks = 0;
+
+    // We will reuse the allocated memory of the pointers vector to store
+    // the number of pruned blocks before the block.
+    // The invariant is that all values up to i are overwritten while all
+    // values starting after i will still be valid pointers
+    std::vector<size_type> &num_blocks_skipped = *level.pointers;
+    for (size_type i = 0; i < level.num_blocks; i++) {
+      const size_type ptr = (*level.pointers)[i];
+      num_blocks_skipped[i] = i - num_non_pruned;
+
+      // If the current block is not pruned, add it to the new tree
+      if (ptr == PRUNED) {
+        continue;
+      }
+
+      // Add it to the is_internal bit vector
+      const bool block_is_internal = (*level.is_internal)[i];
+      (*is_internal)[num_non_pruned] = block_is_internal;
+      num_non_pruned++;
+
+      if (block_is_internal) {
+        continue;
+      }
+      // If it is a back block, add its pointer and offset
+      const size_type offset = (*level.offsets)[i];
+
+      (*pointers)[num_back_blocks] = ptr - num_blocks_skipped[ptr];
+      (*offsets)[num_back_blocks] = offset;
+      num_back_blocks++;
+    }
+    sdsl::util::bit_compress(*pointers);
+    sdsl::util::bit_compress(*offsets);
+    this->block_tree_types_.push_back(is_internal);
+    this->block_tree_types_rs_.push_back(new Rank(*is_internal));
+    this->block_tree_pointers_.push_back(pointers);
+    this->block_tree_offsets_.push_back(offsets);
+    this->block_size_lvl_.push_back(level.block_size);
+  }
+
+  /// @brief Prunes the tree of unnecessary nodes.
+  /// @param levels The levels of the tre represented as a vector of levels.
+  void prune(std::vector<LevelData> &levels) {
+    // We need to traverse the block tree in post order,
+    // handling children from right to left.
+    for (int block_index = levels[0].num_blocks - 1; block_index >= 0;
+         --block_index) {
+      prune_block(levels, 0, block_index);
+    }
+  }
+
+  /// @brief
+  /// @param levels
+  /// @param level_index
+  /// @param block_index
+  /// @return Whether this block is/stays internal after the pruning process
+  bool prune_block(std::vector<LevelData> &levels, const size_t level_index,
+                   const size_t block_index) {
+
+    LevelData &level = levels[level_index];
+    BitVector &is_internal = *level.is_internal;
+
+    // If we are at the leaf level, we can't prune anything
+    if (level_index == levels.size() - 1) {
+      return false;
+    }
+
+    // If the current block is a back block already, there is nothing to prune
+    if (!is_internal[block_index]) {
+      return false;
+    }
+
+    const size_type first_child_index = block_index * this->tau_;
+
+    // the number of children before this block which are skipped on the next
+    // level. Since the children of back blocks are not included on the next
+    // level, we need to subtract the skipped blocks
+    const size_t missing_children =
+        block_index == 0
+            ? 0
+            : level.is_internal_rank->rank0(block_index) * this->tau_;
+
+    bool has_internal_children = false;
+
+    if (level_index < levels.size() - 1) {
+      const size_type last_child_index =
+          std::min<size_type>(first_child_index + this->tau_ - 1,
+                              levels[level_index + 1].num_blocks);
+      // Iterate through children in reverse
+      for (size_type child_index = last_child_index;
+           child_index >= first_child_index; --child_index) {
+        has_internal_children |= prune_block(levels, level_index + 1,
+                                             child_index - missing_children);
+      }
+    }
+
+    if (has_internal_children) {
+      // If any of the children is internal, this block stays internal as well
+      return true;
+    }
+
+    const size_type pointer = (*level.pointers)[block_index];
+    const size_type offset = (*level.offsets)[block_index];
+    const size_type counter = (*level.counters)[block_index];
+    // If there is no earlier occurrence or there are blocks pointing to this,
+    // then this must stay internal
+    if (pointer == NO_EARLIER_OCC || counter > 0) {
+      return true;
+    }
+
+    // Now we know that there is an earlier occurrence,
+    // and nothing is pointing here. We will make this block here into a back
+    // block and mark the children as pruned
+    LevelData &child_level = levels[level_index + 1];
+    for (size_type child_index = first_child_index;
+         child_index < first_child_index + this->tau_; ++child_index) {
+      const size_type child_pointer =
+          (*child_level.pointers)[child_index - missing_children];
+      const size_type child_offset =
+          (*child_level.offsets)[child_index - missing_children];
+      // Decrement the counter of where the child points
+      (*child_level.counters)[child_pointer] -= 1;
+      (*child_level.counters)[child_pointer + 1] -= child_offset > 0;
+      // Mark the child as pruned
+      (*child_level.pointers)[child_index - missing_children] = PRUNED;
+    }
+
+    // This is now a back block
+    is_internal[block_index] = false;
+    (*level.counters)[pointer] += 1;
+    (*level.counters)[pointer + 1] += offset > 0;
+
+    return false;
+  }
+
   /// @brief Branch-less saturating subtraction.
   ///
   /// Source: http://locklessinc.com/articles/sat_arithmetic/
@@ -554,8 +677,6 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     res &= -(res <= x);
     return res;
   }
-
-  // TODO prune
 
 public:
   BlockTreeFP2(const std::vector<input_type> &text, const size_t arity,

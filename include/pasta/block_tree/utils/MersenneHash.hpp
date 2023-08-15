@@ -45,7 +45,7 @@ public:
         return false;
       }
     }
-    return true;
+    return hash_ == other.hash_;
   }
 };
 

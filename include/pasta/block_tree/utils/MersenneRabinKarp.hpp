@@ -42,6 +42,12 @@ public:
   uint64_t hash_;
   uint128_t max_sigma_;
 
+  /// @brief Construct a new Rabin Karp hasher.
+  /// @param text The text to hash.
+  /// @param sigma The alphabet size.
+  /// @param init The start index of the first hashed window in the text.
+  /// @param length The window size.
+  /// @param prime A large prime used for modulus operations.
   MersenneRabinKarp(std::vector<T> const &text, uint64_t sigma, uint64_t init,
                     uint64_t length, uint128_t prime)
       : text_(text), sigma_(sigma), init_(init), length_(length),
@@ -65,7 +71,6 @@ public:
       return;
     }
     init_ = index;
-    max_sigma_ = 1;
     uint128_t fp = 0;
     for (uint64_t i = init_; i < init_ + length_; i++) {
       fp = fp * sigma_;

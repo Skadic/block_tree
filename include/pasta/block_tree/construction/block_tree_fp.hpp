@@ -603,7 +603,7 @@ public:
         auto &lvl_pass1 = *bv_marked[i];
         // Number of non-pruned blocks so far
         size_type c = 0;
-        // 
+        //
         size_type c_u = 0;
         for (uint64_t j = 0; j < lvl_pass1.size(); j++) {
           blocks_skipped[j] = j - c;
