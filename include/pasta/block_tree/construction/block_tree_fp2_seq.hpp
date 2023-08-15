@@ -405,7 +405,8 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     std::vector<size_t> new_num_internal(levels.size(), 0);
     for (size_t level = 0; level < levels.size(); level++) {
-      for (size_type block = 0; block < levels[level].num_blocks; block++) {
+      for (size_t block = 0; block < levels[level].is_internal->size();
+           block++) {
         if ((*levels[level].is_internal)[block]) {
           new_num_internal[level]++;
         }
@@ -414,12 +415,12 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     // Create first level
     bool found_back_block =
-        levels[0].is_internal->size() == new_num_internal[0] ||
+        levels[0].is_internal->size() > new_num_internal[0] ||
         !this->CUT_FIRST_LEVELS;
     LevelData &top_level = levels.front();
     if (found_back_block) {
       const size_t n = top_level.num_blocks;
-      const size_t num_internal = top_level.is_internal_rank->rank1(n);
+      const size_t num_internal = new_num_internal[0];
       auto pointers = new sdsl::int_vector<>(n - num_internal, 0);
       auto offsets = new sdsl::int_vector<>(n - num_internal, 0);
       size_t num_back_blocks = 0;
@@ -448,15 +449,15 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     for (size_t level_index = 1; level_index < levels.size(); level_index++) {
       LevelData &level = levels[level_index];
       LevelData &previous_level = levels[level_index - 1];
-
       found_back_block |= levels[level_index].is_internal->size() ==
                           new_num_internal[level_index];
       if (!found_back_block) {
+        level.is_internal.reset();
+        level.is_internal_rank.reset();
         level.pointers.reset();
         level.offsets.reset();
         level.counters.reset();
-        previous_level.is_internal.reset();
-        previous_level.is_internal_rank.reset();
+        previous_level.block_starts.reset();
         continue;
       }
 
@@ -464,9 +465,12 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
                       text.size());
 
       // We don't need these anymore
+      level.is_internal.reset();
+      level.is_internal_rank.reset();
       level.pointers.reset();
       level.offsets.reset();
       level.counters.reset();
+      previous_level.block_starts.reset();
     }
 
     this->leaf_size = levels.back().block_size / this->tau_;
@@ -500,42 +504,34 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @param level_index The index of the level to generate.
   /// @param is_padded Whether there is padding in the last block of the tree
   void make_tree_level(std::vector<LevelData> &levels,
-                       std::vector<size_t> &new_num_internal,
+                       const std::vector<size_t> &new_num_internal,
                        const size_t level_index, const bool is_padded,
                        const size_t text_len) {
     LevelData &previous_level = levels[level_index - 1];
     LevelData &level = levels[level_index];
 
-    const size_type previous_level_num_blocks = previous_level.num_blocks;
     size_type new_size =
-        (previous_level.is_internal_rank->rank1(previous_level_num_blocks) -
-         is_padded) *
-        this->tau_;
-    previous_level.is_internal.reset();
-    previous_level.is_internal_rank.reset();
+        (new_num_internal[level_index - 1] - is_padded) * this->tau_;
     // Determine the number of children the last block generated
     if (is_padded) {
       const size_type last_block_parent_start =
           previous_level.block_starts->back();
       const size_type block_size = level.block_size;
-      for (uint64_t i = 0; i < static_cast<uint64_t>(this->tau_); i++) {
-        // Count the number of blocks that still start before the text end
-        new_size += last_block_parent_start + i * block_size < text_len;
-      }
+      new_size += ceil_div(text_len - last_block_parent_start, block_size);
     }
     previous_level.block_starts.reset();
-    const size_t n = level.num_blocks;
-    const size_t num_internal = new_num_internal[level_index];
-    auto is_internal = new BitVector(level.num_blocks);
-    auto pointers = new sdsl::int_vector<>(n - num_internal, 0);
-    auto offsets = new sdsl::int_vector<>(n - num_internal, 0);
-    size_t num_non_pruned = 0;
-    size_t num_back_blocks = 0;
+    const size_type num_internal = new_num_internal[level_index];
+    auto is_internal = new BitVector(new_size);
+    auto pointers = new sdsl::int_vector<>(new_size - num_internal + 1, 0);
+    auto offsets = new sdsl::int_vector<>(new_size - num_internal + 1, 0);
+    size_type num_non_pruned = 0;
+    size_type num_back_blocks = 0;
 
     // We will reuse the allocated memory of the pointers vector to store
     // the number of pruned blocks before the block.
     // The invariant is that all values up to i are overwritten while all
     // values starting after i will still be valid pointers
+    // This contains the number of pruned blocks before the block i
     std::vector<size_type> &num_blocks_skipped = *level.pointers;
     for (size_type i = 0; i < level.num_blocks; i++) {
       const size_type ptr = (*level.pointers)[i];
@@ -554,6 +550,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       if (block_is_internal) {
         continue;
       }
+
       // If it is a back block, add its pointer and offset
       const size_type offset = (*level.offsets)[i];
 
@@ -604,7 +601,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     const size_type first_child_index = block_index * this->tau_;
 
-    // the number of children before this block which are skipped on the next
+    // The number of children before this block which are skipped on the next
     // level. Since the children of back blocks are not included on the next
     // level, we need to subtract the skipped blocks
     const size_t missing_children =
@@ -614,6 +611,9 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     bool has_internal_children = false;
 
+    // On the last level, all blocks just have leaves as children,
+    // none of which can be pointed to. So only recurse, if we are not on the
+    // last level.
     if (level_index < levels.size() - 1) {
       const size_type last_child_index =
           std::min<size_type>(first_child_index + this->tau_ - 1,
@@ -655,6 +655,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       (*child_level.counters)[child_pointer + 1] -= child_offset > 0;
       // Mark the child as pruned
       (*child_level.pointers)[child_index - missing_children] = PRUNED;
+      (*child_level.is_internal)[child_index - missing_children] = false;
     }
 
     // This is now a back block
@@ -663,19 +664,6 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     (*level.counters)[pointer + 1] += offset > 0;
 
     return false;
-  }
-
-  /// @brief Branch-less saturating subtraction.
-  ///
-  /// Source: http://locklessinc.com/articles/sat_arithmetic/
-  ///
-  /// @param x The minuend.
-  /// @param y The subtrahend.
-  /// @return x - y. However, if the result would underflow, returns zero.
-  static inline constexpr auto saturating_sub(size_t x, size_t y) -> size_t {
-    size_t res = x - y;
-    res &= -(res <= x);
-    return res;
   }
 
 public:

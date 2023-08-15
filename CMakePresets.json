@@ -58,7 +58,7 @@
         "PASTA_BLOCK_TREE_BUILD_EXAMPLES": "ON",
         "CMAKE_CXX_FLAGS": "-fopenmp -Wall -Wextra -pedantic -Werror -march=native -fdiagnostics-color=always",
         "CMAKE_CXX_FLAGS_RELEASE": "-DNDEBUG -O3",
-        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-DDEBUG -g -O3",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-DDEBUG -g -O3 -lprofiler",
         "CMAKE_CXX_FLAGS_DEBUG": "-DDEBUG -O0 -g -ggdb -fsanitize=address"
       }
     }
@@ -96,9 +96,14 @@
     {
       "name": "default",
       "configurePreset": "ninja-multi",
-      "output": {"outputOnFailure": true},
-      "execution": {"noTestsAction": "error", "stopOnFailure": true},
+      "output": {
+        "outputOnFailure": true
+      },
+      "execution": {
+        "noTestsAction": "error",
+        "stopOnFailure": true
+      },
       "configuration": "RelWithDebInfo"
     }
-  ] 
+  ]
 }
