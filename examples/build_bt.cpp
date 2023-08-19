@@ -81,6 +81,7 @@ int main(int argc, char** argv) {
   std::vector<uint8_t> text(input.begin(), input.end());
 
   TimePoint now = Clock::now();
+
   auto bt =
       std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(text,
                                                               arity,
@@ -88,7 +89,7 @@ int main(int argc, char** argv) {
                                                               leaf_length);
 
   // auto bt =
-  //   pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length);
+  //     pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length);
 
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)

@@ -21,16 +21,26 @@
 #pragma once
 
 #include "pasta/block_tree/utils/MersenneHash.hpp"
+
 #include <iostream>
 
 namespace pasta {
 
-template <class T, class size_type> class MersenneRabinKarp {
+///
+/// @brief A Rabin-Karp rolling hasher.
+///
+/// @tparam T The type of the characters in the text.
+/// @tparam size_type The type to use for indexing etc.
+/// @tparam mersenne_exponent If using a mersenne prime 2^p-1, then this should
+/// be p. If this is 0, a normal modulus operation will be used
+///
+template <class T, class size_type, uint8_t mersenne_exponent = 0>
+class MersenneRabinKarp {
   __extension__ typedef unsigned __int128 uint128_t;
 
 public:
   /// The text being hashed
-  std::vector<T> const &text_;
+  std::vector<T> const& text_;
   uint128_t sigma_;
   /// The start index of the currently hashed window
   uint64_t init_;
@@ -48,9 +58,15 @@ public:
   /// @param init The start index of the first hashed window in the text.
   /// @param length The window size.
   /// @param prime A large prime used for modulus operations.
-  MersenneRabinKarp(std::vector<T> const &text, uint64_t sigma, uint64_t init,
-                    uint64_t length, uint128_t prime)
-      : text_(text), sigma_(sigma), init_(init), length_(length),
+  MersenneRabinKarp(std::vector<T> const& text,
+                    uint64_t sigma,
+                    uint64_t init,
+                    uint64_t length,
+                    uint128_t prime)
+      : text_(text),
+        sigma_(sigma),
+        init_(init),
+        length_(length),
         prime_(prime) {
     max_sigma_ = 1;
     uint128_t fp = 0;
@@ -80,9 +96,12 @@ public:
   };
 
   inline uint128_t mersenneModulo(uint128_t k) {
-    return k % prime_;
-    //        uint128_t i = (k & prime_) + (k >> power_);
-    //        return (i >= prime_) ? i - prime_ : i;
+    if constexpr (mersenne_exponent == 0) {
+      return k % prime_;
+    } else {
+      uint128_t i = (k & prime_) + (k >> mersenne_exponent);
+      return (i >= prime_) ? i - prime_ : i;
+    }
   };
 
   inline MersenneHash<T> current_hash() const {

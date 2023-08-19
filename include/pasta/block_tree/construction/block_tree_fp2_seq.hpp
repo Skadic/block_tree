@@ -41,6 +41,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
   static constexpr size_type SIGMA = 256;
   static constexpr uint128_t K_PRIME = 2305843009213693951ULL;
+  static constexpr uint8_t MERSENNE_EXPONENT = 61;
 
   using BitVector = pasta::BitVector;
   // using Rank = pasta::FlatRank<pasta::OptimizedFor::ONE_QUERIES, BitVector>;
@@ -51,7 +52,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
             typename hash_type = std::hash<key_type>>
   using HashMap = std::unordered_map<key_type, value_type, hash_type>;
 
-  using RabinKarp = MersenneRabinKarp<input_type, size_type>;
+  using RabinKarp = MersenneRabinKarp<input_type, size_type, MERSENNE_EXPONENT>;
   // using RabinKarp = MersenneRabinKarp<uint8_t, size_t>;
   using RabinKarpHash = MersenneHash<input_type>;
   // using RabinKarpHash = MersenneHash<uint8_t>;
