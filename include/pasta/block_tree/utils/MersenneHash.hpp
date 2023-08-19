@@ -22,6 +22,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <iostream>
 #include <vector>
 
@@ -30,7 +31,7 @@ namespace pasta {
 template <typename T>
 class MersenneHash {
 public:
-  std::vector<T> const& text_;
+  std::reference_wrapper<const std::vector<T>> text_;
   uint64_t hash_;
   uint32_t start_;
   uint32_t length_;
@@ -42,18 +43,29 @@ public:
         hash_(hash),
         start_(start),
         length_(length){};
+
+  MersenneHash (const MersenneHash<T> &other) = default;
+  MersenneHash (const MersenneHash<T> &&other) = default;
+
+  MersenneHash<T> &operator=(MersenneHash<T> &other) = default;
+  MersenneHash<T> &operator=(MersenneHash<T> &&other) = default;
+
   bool operator==(const MersenneHash& other) const {
     //            std::cout << start_ << " " << other.start_ << std::endl;
     if (length_ != other.length_)
       return false;
 
+    const std::vector<T> &text = text_;
+    const std::vector<T> &other_text = other.text_;
+ 
     for (uint64_t i = 0; i < length_; i++) {
-      if (text_[start_ + i] != other.text_[other.start_ + i]) {
+      if (text[start_ + i] != other_text[other.start_ + i]) {
         return false;
       }
     }
     return hash_ == other.hash_;
   }
+
 };
 
 } // namespace pasta
