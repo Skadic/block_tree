@@ -21,14 +21,16 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <pasta/block_tree/construction/block_tree_fp.hpp>
+#include <pasta/block_tree/construction/block_tree_fp2_seq.hpp>
 #include <sstream>
 #include <string>
 
-// #include <pasta/block_tree/construction/block_tree_fp.hpp>
-#include <pasta/block_tree/construction/block_tree_fp2_seq.hpp>
+using Clock = std::chrono::high_resolution_clock;
+using TimePoint = Clock::time_point;
+using Duration = Clock::duration;
 
-int main(int argc, char **argv) {
-
+int main(int argc, char** argv) {
   if (argc < 2) {
     std::cerr << "Please input file" << std::endl;
     exit(1);
@@ -78,14 +80,22 @@ int main(int argc, char **argv) {
 
   std::vector<uint8_t> text(input.begin(), input.end());
 
-  auto bt = std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(
-      text, arity, root_arity, leaf_length);
+  TimePoint now = Clock::now();
+  auto bt =
+      std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(text,
+                                                              arity,
+                                                              root_arity,
+                                                              leaf_length);
+
   // auto bt =
-  //     pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length);
+  //   pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length);
 
-  std::cout << "bt size: " << bt->print_space_usage() / 1000 << "kb"
-            << std::endl;
+  auto elapsed =
+      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
+          .count();
 
+  std::cout << "bt size: " << bt->print_space_usage() / 1000 << "kb\n"
+            << "Time: " << elapsed << "ms" << std::endl;
   // std::ofstream ot(out_path);
   // bt->serialize(ot);
   // ot.close();

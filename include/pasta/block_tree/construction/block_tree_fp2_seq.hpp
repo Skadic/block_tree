@@ -20,13 +20,13 @@
 
 #pragma once
 
-#include <concepts>
-#include <memory>
-
 #include "pasta/bit_vector/bit_vector.hpp"
 #include "pasta/block_tree/block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
+
+#include <concepts>
+#include <memory>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 
@@ -36,7 +36,6 @@ namespace pasta {
 
 template <std::integral input_type, std::signed_integral size_type>
 class BlockTreeFP2 : public BlockTree<input_type, size_type> {
-
   constexpr static size_type NO_EARLIER_OCC = -1;
   constexpr static size_type PRUNED = -2;
 
@@ -47,7 +46,8 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   // using Rank = pasta::FlatRank<pasta::OptimizedFor::ONE_QUERIES, BitVector>;
   using Rank = pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>;
 
-  template <typename key_type, typename value_type,
+  template <typename key_type,
+            typename value_type,
             typename hash_type = std::hash<key_type>>
   using HashMap = std::unordered_map<key_type, value_type, hash_type>;
 
@@ -80,25 +80,35 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     /// The number of blocks on the current level
     size_type num_blocks;
 
-    inline LevelData(size_type level_index_, size_type block_size_,
+    inline LevelData(size_type level_index_,
+                     size_type block_size_,
                      size_type num_blocks_)
-        : is_internal(nullptr), is_internal_rank(nullptr),
+        : is_internal(nullptr),
+          is_internal_rank(nullptr),
           pointers(new std::vector<size_type>()),
           offsets(new std::vector<size_type>()),
           counters(new std::vector<size_type>()),
-          block_starts(new std::vector<size_type>()), block_size(block_size_),
-          level_index(level_index_), num_blocks(num_blocks_) {}
+          block_starts(new std::vector<size_type>()),
+          block_size(block_size_),
+          level_index(level_index_),
+          num_blocks(num_blocks_) {}
 
     /// @brief Checks whether a block is adjacent in the text
     ///   to its successor on this level
-    [[nodiscard]] inline bool is_adjacent(size_type i) const {
-      assert(i < num_blocks - 1);
+    [[nodiscard]] inline bool next_is_adjacent(size_t i) const {
       return (*block_starts)[i] + static_cast<size_type>(block_size) ==
              (*block_starts)[i + 1];
     }
+
+    /// @brief Checks whether a block is adjacent in the text
+    ///   to its predecessor on this level
+    [[nodiscard]] inline bool prev_is_adjacent(size_t i) const {
+      return (*block_starts)[i - 1] + static_cast<size_type>(block_size) ==
+             (*block_starts)[i];
+    }
   };
 
-  void construct(const std::vector<input_type> &text) {
+  void construct(const std::vector<input_type>& text) {
     const size_type text_len = text.size();
     /// The number of characters a block tree with s top-level blocks and arity
     /// of strictly tau would exceed over the text size
@@ -116,7 +126,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     // Prepare the top level
     levels.emplace_back(0, top_block_size, text_len / top_block_size);
-    LevelData &top_level = levels.back();
+    LevelData& top_level = levels.back();
     top_level.block_starts->reserve(ceil_div(text_len, top_level.block_size));
     for (size_type i = 0; i < text_len; i += top_level.block_size) {
       top_level.block_starts->push_back(i);
@@ -126,7 +136,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
-      LevelData &current = levels.back();
+      LevelData& current = levels.back();
       scan_block_pairs(text, current, is_padded);
       scan_blocks(text, current, is_padded);
 
@@ -143,21 +153,20 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @brief Returns the ceiling of x / y for x > 0;
   ///
   /// https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-
   inline size_t ceil_div(std::integral auto x, std::integral auto y) {
     return 1 + ((x - 1) / y);
   }
 
-  /// Scan through the blocks pairwise in order to identify which blocks should
-  /// be replaced with back blocks.
+  /// @briefScan through the blocks pairwise in order to identify which blocks should
+  ///   be replaced with back blocks.
   ///
   /// @param text The input string.
   /// @param level The data for the current level.
   ///
   /// @return The block start indices for the next level of the tree
-  __attribute__((noinline)) void
-  scan_block_pairs(const std::vector<input_type> &text, LevelData &level,
-                   const bool is_padded) {
+  static void scan_block_pairs(const std::vector<input_type>& text,
+                               LevelData& level,
+                               const bool is_padded) {
     const size_t block_size = level.block_size;
     const size_t num_blocks = level.num_blocks;
     const size_t pair_size = 2 * block_size;
@@ -183,7 +192,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       for (size_t i = 0; i < num_blocks - 1 - is_padded; ++i) {
         // If the next block is not adjacent, we cannot hash the pair starting
         // at the current block
-        if (!level.is_adjacent(i)) {
+        if (!level.next_is_adjacent(i)) {
           continue;
         }
         // Move the hasher to the current block pair
@@ -197,7 +206,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     // previous occurrences.
     RabinKarp rk(text, SIGMA, 0, pair_size, K_PRIME);
     for (size_t i = 0; i < num_blocks - 1 - is_padded; ++i) {
-      if (!level.is_adjacent(i) | !level.is_adjacent(i + 1)) {
+      if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
         continue;
       }
       scan_windows_in_block_pair(rk, map, markings, block_size);
@@ -205,7 +214,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     // Generate the bit vector indicating which blocks are internal
     level.is_internal = std::make_unique<BitVector>(num_blocks);
-    auto &is_internal = *level.is_internal;
+    auto& is_internal = *level.is_internal;
     is_internal[0] = true;
     is_internal[num_blocks - 1] = markings[num_blocks - 1] != 0b01;
     for (size_t i = 0; i < num_blocks - 1; ++i) {
@@ -216,7 +225,8 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   }
 
   /// @brief Scan through the windows starting in a block and mark them
-  /// accordingly if they represent the earliest occurrence of some block hash.
+  ///   accordingly if they represent the earliest occurrence of some block
+  ///   hash.
   ///
   /// The supplied `RabinKarp` hasher must be at the start of the block.
   /// @param rk A Rabin-Karp hasher whose state is at the start of the block.
@@ -228,9 +238,11 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   ///   successor has an earlier occurrence. If the LSB being set means that
   ///   the content of the block and its predecessor has an earlier occurrence.
   /// @param block_size The size of blocks on the current level.
-  static inline void scan_windows_in_block_pair(
-      RabinKarp &rk, RabinKarpMap<std::vector<size_type>> &map,
-      sdsl::int_vector<2> &markings, const size_t block_size) {
+  static inline void
+  scan_windows_in_block_pair(RabinKarp& rk,
+                             RabinKarpMap<std::vector<size_type>>& map,
+                             sdsl::int_vector<2>& markings,
+                             const size_t block_size) {
     for (size_t offset = 0; offset < block_size; ++offset, rk.next()) {
       RabinKarpHash current_hash = rk.current_hash();
       // Find the hash of the current window among the hashed block pairs.
@@ -238,7 +250,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       if (found_hash_ptr == map.end()) {
         continue;
       }
-      auto &[block_pair_hash, block_indices] = *found_hash_ptr;
+      auto& [block_pair_hash, block_indices] = *found_hash_ptr;
 
       // If the hash we found is just the first block pair in the hash map,
       // then the first block pair has no earlier occurrence.
@@ -258,16 +270,16 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @brief Determine the positions for each block's earliest occurrence if
   /// there is any.
   ///
-  /// @param s
-  /// @param level_data
-  /// @param is_padded
-  /// @return
-  __attribute__((noinline)) auto scan_blocks(const std::vector<input_type> &s,
-                                             LevelData &level_data,
-                                             const bool is_padded) {
+  /// @param s The input text
+  /// @param level_data The data for the current level
+  /// @param is_padded true, iff the last block of the level extends past the
+  ///   end of the text
+  static void scan_blocks(const std::vector<input_type>& s,
+                          LevelData& level_data,
+                          const bool is_padded) {
     const size_t block_size = level_data.block_size;
     const size_t num_blocks = level_data.num_blocks;
-    const std::vector<size_type> &block_starts = *level_data.block_starts;
+    const std::vector<size_type>& block_starts = *level_data.block_starts;
 
     level_data.pointers =
         std::make_unique<std::vector<size_type>>(num_blocks, NO_EARLIER_OCC);
@@ -297,55 +309,60 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     for (size_t current_block_index = 0;
          current_block_index < num_blocks - is_padded - 1;
          ++current_block_index) {
-
       if (static_cast<int64_t>(rk.init_) != block_starts[current_block_index]) {
         rk.restart(block_starts[current_block_index]);
       }
 
-      scan_windows_in_block(rk, links, level_data, current_block_index);
+      if (level_data.next_is_adjacent(current_block_index)) {
+        scan_windows_in_block(rk, links, level_data, current_block_index);
+        continue;
+      }
     }
   }
-  /// \brief Scans through block-sized windows starting inside one block and
+  /// @brief Scans through block-sized windows starting inside one block and
   ///     tries to find earlier occurrences of blocks. Non-internal blocks will
   ///     have their respective m_source_blocks and m_offsets entries populated.
-  /// \param rk A Rabin-Karp hasher whose current state is at a block start.
-  /// \param links A map whose keys are hashed blocks and the values
+  /// @param rk A Rabin-Karp hasher whose current state is at a block start.
+  /// @param links A map whose keys are hashed blocks and the values
   ///   are all block indices of blocks matching the hash in ascending order.
-  /// \param current_block_internal_index The index of the block which the
+  /// @param current_block_internal_index The index of the block which the
   ///   Rabin-Karp hasher is situated in only with respect to *internal blocks*
   ///   on the current level, disregarding back blocks.
-  /// \param num_hashes The number of times the Rabin-Karp hasher should hash.
-  __attribute__((noinline)) static void scan_windows_in_block(
-      RabinKarp &rk, RabinKarpMap<std::vector<size_type>> &links,
-      LevelData &level_data, const size_t current_block_index) {
-    const BitVector &is_internal = *level_data.is_internal;
+  /// @param num_hashes The number of times the Rabin-Karp hasher should hash.
+  static void scan_windows_in_block(RabinKarp& rk,
+                                    RabinKarpMap<std::vector<size_type>>& links,
+                                    LevelData& level_data,
+                                    const size_type current_block_index) {
+    const BitVector& is_internal = *level_data.is_internal;
     for (size_type offset = 0; offset < level_data.block_size;
          ++offset, rk.next()) {
-      const RabinKarpHash current_hash = rk.current_hash();
+      const RabinKarpHash hash = rk.current_hash();
       // Find all blocks in the multimap that match our hash
-      auto found = links.find(current_hash);
+      auto found = links.find(hash);
       if (found == links.end()) {
         continue;
       }
-      const auto &[block_hash, found_blocks] = *found;
+      const auto& [block_hash, found_blocks] = *found;
       const size_t num_found_blocks = found_blocks.size();
       // In this case, we are hashing an actual block right now (not just an
       // arbitrary window). As a result, the first block in the vector is the
       // block we are currently hashing in
-      const size_t skip_first =
-          block_hash.start_ == current_hash.start_ ? 1 : 0;
-      for (size_t i = skip_first; i < num_found_blocks; ++i) {
+      for (size_t i = 0; i < num_found_blocks; ++i) {
         const size_type block_index = found_blocks[i];
+        if (block_index == current_block_index ||
+            (offset > 0 && block_index == current_block_index + 1)) {
+          continue;
+        }
         (*level_data.pointers)[block_index] = current_block_index;
         (*level_data.offsets)[block_index] = offset;
         // We increment the counter for the block that is being pointed to
         // if the current block is actually a back block
         // If the offset is greater than 0,
         // then it also overlaps into the next block
-        const size_t is_internal_block = is_internal[block_index] == 0 ? 1 : 0;
-        (*level_data.counters)[current_block_index] += 1;
+        const bool is_back_block = !is_internal[block_index];
+        (*level_data.counters)[current_block_index] += is_back_block;
         (*level_data.counters)[current_block_index + 1] +=
-            is_internal_block & (offset > 0);
+            is_back_block && (offset > 0);
       }
       links.erase(found);
     }
@@ -361,11 +378,11 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @param level The level data of the previous level.
   /// @return The level data of the next level.
   [[nodiscard]] LevelData
-  generate_next_level(const std::vector<input_type> &text,
-                      const LevelData &level) const {
+  generate_next_level(const std::vector<input_type>& text,
+                      const LevelData& level) const {
     const size_t block_size = level.block_size;
     const size_t num_blocks = level.num_blocks;
-    const auto &is_internal = *level.is_internal;
+    const auto& is_internal = *level.is_internal;
     const size_t next_block_size = block_size / this->tau_;
 
     std::vector<size_type> new_block_starts;
@@ -386,7 +403,8 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       }
     }
 
-    LevelData next_level(level.level_index + 1, next_block_size,
+    LevelData next_level(level.level_index + 1,
+                         next_block_size,
                          new_block_starts.size());
     next_level.block_starts =
         std::make_unique<std::vector<size_type>>(std::move(new_block_starts));
@@ -399,8 +417,9 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @param[in] levels A vector containing data for each level, with the first
   /// entry corresponding to the topmost level.
   ///
-  void make_tree(const std::vector<input_type> &text,
-                 std::vector<LevelData> &levels, int64_t padding) {
+  void make_tree(const std::vector<input_type>& text,
+                 std::vector<LevelData>& levels,
+                 int64_t padding) {
     const bool is_padded = padding > 0;
 
     // Count the current number of internal blocks per level
@@ -418,7 +437,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     bool found_back_block = levels[0].is_internal->size() >
                                 static_cast<size_t>(new_num_internal[0]) ||
                             !this->CUT_FIRST_LEVELS;
-    LevelData &top_level = levels.front();
+    LevelData& top_level = levels.front();
     if (found_back_block) {
       const size_t n = top_level.num_blocks;
       const size_t num_internal = new_num_internal[0];
@@ -448,10 +467,10 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
     // Add level data to the tree
     for (size_t level_index = 1; level_index < levels.size(); level_index++) {
-      LevelData &level = levels[level_index];
-      LevelData &previous_level = levels[level_index - 1];
-      found_back_block |= levels[level_index].is_internal->size() ==
-                          static_cast<size_t>(new_num_internal[level_index]);
+      LevelData& level = levels[level_index];
+      LevelData& previous_level = levels[level_index - 1];
+      found_back_block |= static_cast<size_t>(new_num_internal[level_index]) <
+                          levels[level_index].is_internal->size();
       if (!found_back_block) {
         level.is_internal.reset();
         level.is_internal_rank.reset();
@@ -462,11 +481,16 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
         continue;
       }
 
-      make_tree_level(levels, new_num_internal, level_index, is_padded,
+      make_tree_level(levels,
+                      new_num_internal,
+                      level_index,
+                      is_padded,
                       text.size());
 
       // We don't need these anymore
-      level.is_internal.reset();
+      if (level_index < levels.size() - 1) {
+        level.is_internal.reset();
+      }
       level.is_internal_rank.reset();
       level.pointers.reset();
       level.offsets.reset();
@@ -477,22 +501,21 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     this->leaf_size = levels.back().block_size / this->tau_;
     // Construct the leaf string
     int64_t leaf_count = 0;
-    auto &last_level = *this->block_tree_types_.back();
-    std::vector<size_type> &last_level_block_starts =
-        *levels.back().block_starts;
-    for (uint64_t i = 0; i < last_level.size(); i++) {
-      if (!last_level[i]) {
+    auto& last_is_internal = *levels.back().is_internal;
+    std::vector<size_type>& last_block_starts = *levels.back().block_starts;
+    for (size_t block = 0; block < last_is_internal.size(); block++) {
+      if (!last_is_internal[block]) {
         continue;
       }
+      const size_type block_start = last_block_starts[block];
       // For every leaf on the last level, we have tau leaf blocks
       leaf_count += this->tau_;
       // Iterate through all characters in this child and
       // add them to the leaf string
-      for (uint64_t j = 0;
-           j < static_cast<uint64_t>(this->leaf_size * this->tau_); j++) {
-        if (static_cast<uint64_t>(last_level_block_starts[i] + j) <
-            text.size()) {
-          this->leaves_.push_back(text[last_level_block_starts[i] + j]);
+      for (size_t b = 0; b < static_cast<size_t>(this->leaf_size * this->tau_);
+           b++) {
+        if (static_cast<size_t>(block_start + b) < text.size()) {
+          this->leaves_.push_back(text[block_start + b]);
         }
       }
     }
@@ -506,12 +529,13 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   /// @param level_index The index of the level to generate. This must be
   ///   strictly greater than 0.
   /// @param is_padded Whether there is padding in the last block of the tree
-  void make_tree_level(std::vector<LevelData> &levels,
-                       const std::vector<size_type> &new_num_internal,
-                       const size_t level_index, const bool is_padded,
+  void make_tree_level(std::vector<LevelData>& levels,
+                       const std::vector<size_type>& new_num_internal,
+                       const size_t level_index,
+                       const bool is_padded,
                        const size_t text_len) {
-    LevelData &previous_level = levels[level_index - 1];
-    LevelData &level = levels[level_index];
+    LevelData& previous_level = levels[level_index - 1];
+    LevelData& level = levels[level_index];
 
     size_type new_size =
         (new_num_internal[level_index - 1] - is_padded) * this->tau_;
@@ -524,27 +548,17 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     }
     previous_level.block_starts.reset();
     const size_type num_internal = new_num_internal[level_index];
-    // 1 neue size hängt von num_internal auf prev_level ab
-    // 2 die tatsächlichen nodes hängen von num_internal auf level ab
 
-    // Möglichkeiten:
-    // 1: Zu wenige interne Knoten auf prev_level
-    //   idk wie das sein kann
-    //   Dann wären ja zu viele Blöcke auf dem level davor
-    // 2: Zu viele interne Knoten auf last level
-    //   Ma gucken
-    //
-    // num_internal zählt genau, wo ne 1 im bv steht
-    // da wurden die blöcke rausgekickt, die
-    // 1. Earlier Occ haben
-    // 2. Keine Pointer auf sich haben,
-    // 3. Keine Internal children haben.
-    //
-    auto *is_internal = new BitVector(new_size);
-    auto *pointers = new sdsl::int_vector<>(2 * new_size - num_internal, 0);
-    auto *offsets = new sdsl::int_vector<>(2 * new_size - num_internal, 0);
+    // Allocate new vectors for the tree
+    auto* is_internal = new BitVector(new_size);
+    auto* pointers = new sdsl::int_vector<>(new_size - num_internal, 0);
+    auto* offsets = new sdsl::int_vector<>(new_size - num_internal, 0);
+
+    // Number of non-pruned blocks before the current block
     size_type num_non_pruned = 0;
+    // Number of back blocks before the current block
     size_type num_back_blocks = 0;
+    // Number of pruned blocks before the current block
     size_type num_pruned = 0;
 
     // We will reuse the allocated memory of the pointers vector to store
@@ -552,10 +566,10 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     // The invariant is that all values up to i are overwritten while all
     // values starting after i will still be valid pointers
     // This contains the number of pruned blocks before the block i
-    std::vector<size_type> &num_blocks_skipped = *level.pointers;
+    std::vector<size_type>& prefix_pruned_blocks = *level.pointers;
     for (size_type i = 0; i < level.num_blocks; i++) {
       const size_type ptr = (*level.pointers)[i];
-      num_blocks_skipped[i] = i - num_non_pruned;
+      prefix_pruned_blocks[i] = num_pruned;
 
       // If the current block is not pruned, add it to the new tree
       if (ptr == PRUNED) {
@@ -575,7 +589,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       // If it is a back block, add its pointer and offset
       const size_type offset = (*level.offsets)[i];
 
-      (*pointers)[num_back_blocks] = ptr - num_blocks_skipped[ptr];
+      (*pointers)[num_back_blocks] = ptr - prefix_pruned_blocks[ptr];
       (*offsets)[num_back_blocks] = offset;
       num_back_blocks++;
     }
@@ -591,7 +605,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
 
   /// @brief Prunes the tree of unnecessary nodes.
   /// @param levels The levels of the tre represented as a vector of levels.
-  void prune(std::vector<LevelData> &levels) {
+  void prune(std::vector<LevelData>& levels) {
     // We need to traverse the block tree in post order,
     // handling children from right to left.
     for (int block_index = levels[0].num_blocks - 1; block_index >= 0;
@@ -600,35 +614,24 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     }
   }
 
-  /// @brief
-  /// @param levels
-  /// @param level_index
-  /// @param block_index
+  /// @brief Prunes a block and its descendants of unnecessary internal nodes.
+  /// @param levels The WIP levels of the tree.
+  /// @param level_index The level of the block to prune.
+  /// @param block_index The index of the block to prune.
   /// @return Whether this block is/stays internal after the pruning process
-  bool prune_block(std::vector<LevelData> &levels, const size_t level_index,
+  bool prune_block(std::vector<LevelData>& levels,
+                   const size_t level_index,
                    const size_t block_index) {
-    LevelData &level = levels[level_index];
-    BitVector &is_internal = *level.is_internal;
-
-    // If we are at the leaf level, we can't prune anything
-    // if (level_index == levels.size() - 1) {
-    //  return false;
-    //}
+    LevelData& level = levels[level_index];
+    BitVector& is_internal = *level.is_internal;
 
     // If the current block is a back block already, there is nothing to prune
     if (!is_internal[block_index]) {
       return false;
     }
 
-    const size_type first_child_index = block_index * this->tau_;
-
-    // The number of children before this block which are skipped on the next
-    // level. Since the children of back blocks are not included on the next
-    // level, we need to subtract the skipped blocks
-    const size_t missing_children =
-        block_index == 0
-            ? 0
-            : level.is_internal_rank->rank0(block_index) * this->tau_;
+    const size_type first_child =
+        level.is_internal_rank->rank1(block_index) * this->tau_;
 
     bool has_internal_children = false;
 
@@ -636,19 +639,17 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     // none of which can be pointed to. So only recurse, if we are not on the
     // last level.
     if (level_index < levels.size() - 1) {
-      const size_type last_child_index =
-          std::min<size_type>(first_child_index + this->tau_ - 1,
-                              levels[level_index + 1].num_blocks);
+      const size_type last_child =
+          std::min<size_type>(first_child + this->tau_ - 1,
+                              levels[level_index + 1].is_internal->size() - 1);
       // Iterate through children in reverse
-      for (size_type child_index = last_child_index;
-           child_index >= first_child_index; --child_index) {
-        has_internal_children |= prune_block(levels, level_index + 1,
-                                             child_index - missing_children);
+      for (size_type child = last_child; child >= first_child; --child) {
+        has_internal_children |= prune_block(levels, level_index + 1, child);
       }
     }
 
+    // If any of the children is internal, this block stays internal as well
     if (has_internal_children) {
-      // If any of the children is internal, this block stays internal as well
       return true;
     }
 
@@ -662,40 +663,106 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
     }
 
     // Now we know that there is an earlier occurrence,
-    // and nothing is pointing here. We will make this block here into a back
-    // block and mark the children as pruned
-    if (level_index < levels.size() - 1) {
-      LevelData &child_level = levels[level_index + 1];
-      for (size_type child_index = first_child_index;
-           child_index < first_child_index + this->tau_; ++child_index) {
-        const size_type child_pointer =
-            (*child_level.pointers)[child_index - missing_children];
-        const size_type child_offset =
-            (*child_level.offsets)[child_index - missing_children];
-        // Decrement the counter of where the child points
-        (*child_level.counters)[child_pointer] -= 1;
-        (*child_level.counters)[child_pointer + 1] -= child_offset > 0;
-        // Mark the child as pruned
-        (*child_level.pointers)[child_index - missing_children] = PRUNED;
-      }
-    }
-
-    // This is now a back block
+    // and nothing is pointing here.
+    // We will make this block here into a back block...
     is_internal[block_index] = false;
     (*level.counters)[pointer] += 1;
     (*level.counters)[pointer + 1] += offset > 0;
+
+    if (level_index == levels.size() - 1) {
+      return false;
+    }
+
+    // ...and mark the children as pruned
+    LevelData& child_level = levels[level_index + 1];
+    const size_type last_child =
+        std::min<size_type>(first_child + this->tau_ - 1,
+                            child_level.is_internal->size() - 1);
+
+    for (size_type child = last_child; child >= first_child; --child) {
+      const size_type child_pointer = (*child_level.pointers)[child];
+      const size_type child_offset = (*child_level.offsets)[child];
+      // Decrement the counter of where the child points
+      (*child_level.counters)[child_pointer] -= 1;
+      (*child_level.counters)[child_pointer + 1] -= child_offset > 0;
+      // Mark the child as pruned
+      (*child_level.pointers)[child] = PRUNED;
+    }
 
     return false;
   }
 
 public:
-  BlockTreeFP2(const std::vector<input_type> &text, const size_t arity,
-               const size_t root_arity, const size_t max_leaf_length) {
+  BlockTreeFP2(const std::vector<input_type>& text,
+               const size_t arity,
+               const size_t root_arity,
+               const size_t max_leaf_length) {
     this->tau_ = arity;
     this->s_ = root_arity;
     this->max_leaf_length_ = max_leaf_length;
     this->map_unique_chars(text);
     construct(text);
+  }
+
+  ~BlockTreeFP2() {
+    for (auto& rank : this->block_tree_types_rs_) {
+      delete rank;
+    }
+    for (auto& bv : this->block_tree_types_) {
+      delete bv;
+    }
+    for (auto& ptrs : this->block_tree_pointers_) {
+      delete ptrs;
+    }
+    for (auto& offsets : this->block_tree_offsets_) {
+      delete offsets;
+    }
+  }
+
+  /// @brief Validates that a back-pointer actually points to the same text
+  /// content.
+  /// @param text The input text.
+  /// @param level_index The index of the current level.
+  /// @param block_index The block index.
+  /// @param block_start The start index of the block's content in the text.
+  /// @param source_start The start index of the source block's content in the
+  /// text.
+  /// @param source_pointer The block index of the source block.
+  /// @param source_offset The offset from which the block copies out of the
+  /// source block.
+  /// @param block_size The block size.
+  /// @return `true`, iff the pointer is valid. false otherwise
+  bool debug_validate_pointer(const std::vector<input_type>& text,
+                              const size_type level_index,
+                              const size_type block_index,
+                              const size_type block_start,
+                              const size_type source_start,
+                              const size_type source_pointer,
+                              const size_type source_offset,
+                              const size_type block_size) const {
+    if (source_start + block_size > block_start) {
+      std::cerr << "source overlapping block on level " << level_index
+                << ":\n\tBlock Start: " << block_start
+                << "\n\tSource Start: " << source_start
+                << "\n\tBlock Size: " << block_size
+                << "\n\tBlock: " << block_index
+                << "\n\tSource Block: " << source_pointer
+                << "\n\tSource Offset: " << source_offset << std::endl;
+      return false;
+    }
+    for (size_type i = 0; i < block_size; i++) {
+      if (text[block_start + i] != text[source_start + i]) {
+        std::cerr << "source block mismatch on level " << level_index << ": "
+                  << "\n\tBlock Start: " << block_start
+                  << "\n\tSource Start: " << source_start
+                  << "\n\tBlock Size: " << block_size
+                  << "\n\tBlock: " << block_index
+                  << "\n\tSource Block: " << source_pointer
+                  << "\n\tSource Offset: " << source_offset << std::endl;
+        return false;
+      };
+    }
+    return true;
   }
 };
 
