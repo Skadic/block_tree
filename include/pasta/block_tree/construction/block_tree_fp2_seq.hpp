@@ -29,6 +29,7 @@
 #include <memory>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
+#include <robin_hood.h>
 
 __extension__ typedef unsigned __int128 uint128_t;
 
@@ -50,7 +51,7 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
   template <typename key_type,
             typename value_type,
             typename hash_type = std::hash<key_type>>
-  using HashMap = std::unordered_map<key_type, value_type, hash_type>;
+  using HashMap = robin_hood::unordered_flat_map<key_type, value_type, hash_type>;
 
   using RabinKarp = MersenneRabinKarp<input_type, size_type, MERSENNE_EXPONENT>;
   // using RabinKarp = MersenneRabinKarp<uint8_t, size_t>;

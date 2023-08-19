@@ -66,6 +66,7 @@ set(LIBSAIS_USE_OPENMP ON CACHE BOOL "Use OpenMP for parallelization of libsais"
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/robin-hood-hashing)
 
 add_library(pasta_block_tree INTERFACE)
 target_include_directories(pasta_block_tree INTERFACE
@@ -75,6 +76,7 @@ target_link_libraries(pasta_block_tree INTERFACE
         libsais
         pasta_bit_vector
         sdsl
-        tlx)
+        tlx
+        robin_hood)
 
 ################################################################################
