@@ -10,3 +10,9 @@
 [submodule "extlib/robin-hood-hashing"]
 	path = extlib/robin-hood-hashing
 	url = https://github.com/martinus/robin-hood-hashing
+[submodule "extlib/growt"]
+	path = extlib/growt
+	url = git@github.com:TooBiased/growt.git
+[submodule "extlib/parallel-hashmap"]
+	path = extlib/parallel-hashmap
+	url = git@github.com:greg7mdp/parallel-hashmap.git

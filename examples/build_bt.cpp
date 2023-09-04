@@ -18,11 +18,15 @@
  *
  ******************************************************************************/
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <pasta/block_tree/construction/block_tree_fp.hpp>
-#include <pasta/block_tree/construction/block_tree_fp2_seq.hpp>
+//#include <pasta/block_tree/construction/block_tree_fp.hpp>
+//#include <pasta/block_tree/construction/block_tree_fp2_seq.hpp>
+#include <pasta/block_tree/construction/block_tree_fp_par_phmap.hpp>
+//  #include <pasta/block_tree/construction/block_tree_fp_par3.hpp>
+//   #include <pasta/block_tree/construction/block_tree_lpf.hpp>
 #include <sstream>
 #include <string>
 
@@ -72,34 +76,60 @@ int main(int argc, char** argv) {
             << "\nmax leaf length: " << leaf_length << "\nsaving to "
             << out_path << std::endl;
 
-  std::string input;
-  std::ifstream t(argv[1]);
-  std::stringstream buffer;
-  buffer << t.rdbuf();
-  input = buffer.str();
-
-  std::vector<uint8_t> text(input.begin(), input.end());
+  std::vector<uint8_t> text;
+  {
+    std::string input;
+    std::ifstream t(argv[1]);
+    std::stringstream buffer;
+    buffer << t.rdbuf();
+    input = buffer.str();
+    text = std::vector<uint8_t>(input.begin(), input.end());
+  }
 
   TimePoint now = Clock::now();
 
+  /*
   auto bt =
       std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(text,
                                                               arity,
                                                               root_arity,
                                                               leaf_length);
-
-  // auto bt =
-  //     pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length);
-
+    */
+  /*
+  auto bt = std::make_unique<pasta::BlockTreeFP<uint8_t, int32_t>>(text,
+                                                                   arity,
+                                                                   leaf_length,
+                                                                   root_arity,
+                                                                   256,
+                                                                   true,
+                                                                   true);
+  */
+  auto bt =
+      std::make_unique<pasta::BlockTreeFPParPH<uint8_t, int32_t>>(text,
+                                                                  arity,
+                                                                  root_arity,
+                                                                  leaf_length,
+                                                                  8);
+  /*
+  auto bt =
+      std::make_unique<pasta::BlockTreePar2<uint8_t, int32_t>>(text,
+                                                               arity,
+                                                               root_arity,
+                                                               leaf_length);
+*/
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
           .count();
 
   std::cout << "bt size: " << bt->print_space_usage() / 1000 << "kb\n"
             << "Time: " << elapsed << "ms" << std::endl;
-  // std::ofstream ot(out_path);
+
+  std::ofstream ot(out_path);
   // bt->serialize(ot);
-  // ot.close();
+  for (size_t i = 0; i < text.size(); ++i) {
+    ot << (char)bt->access(i);
+  }
+  ot.close();
 
   return 0;
 }

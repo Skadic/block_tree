@@ -31,7 +31,7 @@ namespace pasta {
 template <typename T>
 class MersenneHash {
 public:
-  std::reference_wrapper<const std::vector<T>> text_;
+  const std::vector<T>* text_;
   uint64_t hash_;
   uint32_t start_;
   uint32_t length_;
@@ -39,10 +39,12 @@ public:
                size_t hash,
                uint64_t start,
                uint64_t length)
-      : text_(text),
+      : text_(&text),
         hash_(hash),
         start_(start),
         length_(length){};
+
+  constexpr MersenneHash() : text_(nullptr), hash_(0), start_(0), length_(0){};
 
   constexpr MersenneHash(const MersenneHash& other) = default;
   constexpr MersenneHash(MersenneHash&& other) = default;
@@ -55,8 +57,8 @@ public:
     if (length_ != other.length_)
       return false;
 
-    const std::vector<T>& text = text_;
-    const std::vector<T>& other_text = other.text_;
+    const std::vector<T>& text = *text_;
+    const std::vector<T>& other_text = *other.text_;
 
     for (uint64_t i = 0; i < length_; i++) {
       if (text[start_ + i] != other_text[other.start_ + i]) {
