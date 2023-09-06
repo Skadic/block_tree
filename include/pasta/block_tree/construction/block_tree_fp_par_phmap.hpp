@@ -26,7 +26,9 @@
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 
+#include <atomic>
 #include <concepts>
+#include <list>
 #include <memory>
 #include <omp.h>
 #include <phmap.h>
@@ -38,7 +40,7 @@ using Clock = std::chrono::high_resolution_clock;
 using TimePoint = Clock::time_point;
 using Duration = Clock::duration;
 
-#define BT_NUM_THREADS 2
+#define BT_NUM_THREADS 8
 
 __extension__ typedef unsigned __int128 uint128_t;
 
@@ -61,7 +63,7 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
             typename value_type,
             typename hash_type = std::hash<key_type>>
   using HashMap =
-      phmap::parallel_flat_hash_map<key_type, value_type, hash_type>;
+      phmap::parallel_node_hash_map<key_type, value_type, hash_type>;
   // robin_hood::unordered_map<key_type, value_type, hash_type>;
 
   /// A rabin karp hasher preconfigured for the current template parameters
@@ -73,6 +75,14 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   template <typename value_type>
   using RabinKarpMap = HashMap<RabinKarpHash, value_type>;
 
+public:
+  size_t bp_hash_pairs_ns = 0;
+  size_t bp_scan_pairs_ns = 0;
+  size_t bp_markings_ns = 0;
+  size_t bp_bitvec_ns = 0;
+
+private:
+  /// @brief Contains data about a block tree level under construction
   struct LevelData {
     /// Contains a 1 for each internal block (= block with children)
     /// and a 0 for each block that has a back pointer
@@ -179,8 +189,12 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
     }
 
     std::cout << "pairs: " << (pairs_ns / 1'000'000)
-              << "ms, blocks: " << (blocks_ns / 1'000'000)
-              << "ms, generate: " << (generate_ns / 1'000'000) << "ms"
+              << "ms,\n\thash pairs: " << (bp_hash_pairs_ns / 1'000'000)
+              << "ms,\n\tscan pairs: " << (bp_scan_pairs_ns / 1'000'000)
+              << "ms,\n\tmarkings: " << (bp_markings_ns / 1'000'000)
+              << "ms,\n\tbitvec: " << (bp_bitvec_ns / 1'000'000)
+              << "ms,\nblocks: " << (blocks_ns / 1'000'000)
+              << "ms,\ngenerate: " << (generate_ns / 1'000'000) << "ms"
               << std::endl;
 
     prune(levels);
@@ -195,10 +209,15 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   }
 
   struct PairOccurrences {
-    /// The first block in the text in which the content appears
+    /// @brief The first block in the text in which the content appears
     size_type first_occ_block;
-
-    std::vector<size_type> occurrences;
+    /// @brief A list of block indices in which the content of the hashed block
+    /// pair appears
+    ///
+    /// We're using an std::list here instead of an std::vector, since the
+    /// reallocation upon insertion lead to issues during parallel access, when
+    /// another thread tries to access the vector during reallocation.
+    std::list<size_type> occurrences;
 
     inline explicit PairOccurrences(size_type first_occ_block_)
         : first_occ_block(first_occ_block_),
@@ -224,55 +243,66 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   /// @param level The data for the current level.
   ///
   /// @return The block start indices for the next level of the tree
-  static void scan_block_pairs(const std::vector<input_type>& text,
-                               LevelData& level,
-                               const bool is_padded) {
-    const size_t block_size = level.block_size;
-    const size_t num_blocks = level.num_blocks;
-    const size_t pair_size = 2 * block_size;
-
-    if (num_blocks < 4) {
-      level.is_internal = std::make_unique<BitVector>(num_blocks, true);
+  void scan_block_pairs(const std::vector<input_type>& text,
+                        LevelData& level,
+                        const bool is_padded) {
+    if (level.num_blocks < 4) {
+      level.is_internal = std::make_unique<BitVector>(level.num_blocks, true);
       level.is_internal_rank = std::make_unique<Rank>(*level.is_internal);
       return;
     }
 
     // A map containing hashed block pairs mapped to their indices of the
     // pairs' first block respectively
-    RabinKarpMap<PairOccurrences> map(num_blocks);
+    RabinKarpMap<PairOccurrences> map(level.num_blocks);
 
+    TimePoint now = Clock::now();
+
+#pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
+    shared(level, map, text, now, is_padded)
     {
-      RabinKarp rk(text, SIGMA, 0, pair_size, K_PRIME);
-      for (size_t i = 0; i < num_blocks - 1 - is_padded; ++i) {
+      const size_t block_size = level.block_size;
+      const size_t pair_size = 2 * block_size;
+      const size_t num_blocks = level.num_blocks;
+      const size_t num_block_pairs = num_blocks - 1 - is_padded;
+      const auto& block_starts = *level.block_starts;
+#pragma omp for
+      for (size_t i = 0; i < num_block_pairs; ++i) {
         // If the next block is not adjacent, we cannot hash the pair starting
         // at the current block
         if (!level.next_is_adjacent(i)) {
           continue;
         }
         // Move the hasher to the current block pair
-        rk.restart((*level.block_starts)[i]);
+        RabinKarp rk(text, SIGMA, block_starts[i], pair_size, K_PRIME);
         RabinKarpHash hash = rk.current_hash();
+        // Try to find the hash in the map, insert a new entry if it doesn't
+        // exist, and add the current block to the entry
         auto ptr = map.find(hash);
         if (ptr == map.end()) {
           auto [insert_ptr, _] = map.insert({hash, PairOccurrences(i)});
           ptr = insert_ptr;
         }
         ptr->second.add_block(i);
+        ptr->second.update(i);
       }
-    }
+#pragma omp barrier
+#pragma omp single
+      {
+        bp_hash_pairs_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
+                                                                 now)
+                .count();
+        now = Clock::now();
+      }
 
-    const size_t num_block_pairs = num_blocks - 1 - is_padded;
-
-#pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
-    shared(num_block_pairs, pair_size, level, block_size, map, text)
-    // Hash every window and determine for all block pairs whether they have
-    // previous occurrences.
-    {
-      const auto& block_starts = *level.block_starts;
+      // Hash every window and determine for all block pairs whether they have
+      // previous occurrences.
       size_t segment_size =
           std::max<size_t>(1, ceil_div(num_block_pairs, omp_get_num_threads()));
       const size_t thread_id = omp_get_thread_num();
 
+      // Start and end index of the
       const auto start = thread_id * segment_size;
       const auto end =
           std::min<size_t>(num_block_pairs, (thread_id + 1) * segment_size);
@@ -288,36 +318,49 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
       }
     }
 
+    bp_scan_pairs_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    now = Clock::now();
+
     // Set up the packed array holding the markings for each block.
     // Each mark is a 2-bit number.
     // The MSB is 1 iff the block and its successor have a prior occurrence.
     // The LSB is 1 iff the block and its predecessor have a prior occurrence.
-    sdsl::int_vector<2> markings(num_blocks, 0);
-
+    sdsl::int_vector<2> markings(level.num_blocks, 0);
     for (auto it = map.begin(); it != map.end(); ++it) {
       const PairOccurrences& pair_occs = it->second;
-      const std::vector<size_type>& occs = pair_occs.occurrences;
-      const size_type first_block = occs.front();
-      const bool has_prev_occ = pair_occs.first_occ_block < first_block;
-      const size_type skip = has_prev_occ ? 0 : 1;
-      for (size_t i = skip; i < occs.size(); i++) {
-        const size_type occ = occs[i];
-        markings[occ] = markings[occ] | 0b10;
-        markings[occ + 1] = markings[occ + 1] | 0b01;
+      const auto& block_indices = pair_occs.occurrences;
+      for (auto list_it = block_indices.cbegin();
+           list_it != block_indices.cend();
+           ++list_it) {
+        const size_type occ = *list_it;
+        if (pair_occs.first_occ_block < occ) {
+          markings[occ] = markings[occ] | 0b10;
+          markings[occ + 1] = markings[occ + 1] | 0b01;
+        }
       }
       map.erase(it);
     }
+    bp_markings_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    now = Clock::now();
 
     // Generate the bit vector indicating which blocks are internal
-    level.is_internal = std::make_unique<BitVector>(num_blocks);
+    level.is_internal = std::make_unique<BitVector>(level.num_blocks);
+
     auto& is_internal = *level.is_internal;
     is_internal[0] = true;
-    is_internal[num_blocks - 1] = markings[num_blocks - 1] != 0b01;
-    for (size_t i = 0; i < num_blocks - 1; ++i) {
+    is_internal[level.num_blocks - 1] = markings[level.num_blocks - 1] != 0b01;
+    for (size_type i = 0; i < level.num_blocks - 1; ++i) {
       const bool block_is_internal = markings[i] != 0b11;
       is_internal[i] = block_is_internal;
     }
-    level.is_internal_rank = std::make_unique<Rank>(is_internal);
+    bp_bitvec_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    level.is_internal_rank = std::make_unique<Rank>(*level.is_internal);
   }
 
   /// @brief Scan through the windows starting in a block and mark
@@ -328,13 +371,8 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   /// The supplied `RabinKarp` hasher must be at the start of the block.
   /// @param rk A Rabin-Karp hasher whose state is at the start of the block.
   /// @param map The map containing the hashes of block pairs mapped to their
-  ///   index.
-  /// @param markings A vector storing the marks on a block. Marks are 2-bit
-  ///   integers.
-  ///   If the MSB is set, that means that the content of the block and its
-  ///   successor has an earlier occurrence. If the LSB being set means that
-  ///   the content of the block and its predecessor has an earlier occurrence.
-  /// @param block_size The size of blocks on the current level.
+  ///   block indexes at which they occur.
+  /// @param current_block_index The index of the block being currently hashed.
   static inline void
   scan_windows_in_block_pair(RabinKarp& rk,
                              RabinKarpMap<PairOccurrences>& map,
@@ -353,9 +391,29 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   }
 
   struct BlockOccurrences {
-    bool handled;
+    size_type first_occ_block;
+    size_type first_occ_offset;
     std::vector<size_type> occurrences;
-    BlockOccurrences() : handled(false), occurrences() {}
+    BlockOccurrences(size_type first_occ_block_)
+        : first_occ_block(first_occ_block_),
+          first_occ_offset(0),
+          occurrences() {}
+
+    inline void add_block(size_type block_index) {
+      occurrences.push_back(block_index);
+    }
+
+    /// @brief If the given block index and offset are an earlier occurrence,
+    /// update them
+    /// @param block_index The block index of an occurrence
+    /// @param block_index The offset of that occurrence
+    inline void update(size_type block_index, size_type block_offset) {
+      if (block_index < first_occ_block ||
+          (first_occ_block == block_index && block_offset < first_occ_offset)) {
+        first_occ_block = block_index;
+        first_occ_offset = block_offset;
+      }
+    }
   };
 
   /// @brief Determine the positions for each block's earliest occurrence if
@@ -392,7 +450,7 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
       const RabinKarpHash hash =
           RabinKarp(s, SIGMA, block_starts[i], block_size, K_PRIME)
               .current_hash();
-      links.insert({hash, BlockOccurrences()});
+      links.insert({hash, BlockOccurrences(i)});
       auto& [found_hash, occs] = *links.find(hash);
       occs.occurrences.push_back(i);
     }
@@ -448,9 +506,9 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
         continue;
       }
       auto& [block_hash, found_block_occs] = *found;
-      if (found_block_occs.handled) {
-        continue;
-      }
+
+      // found_block_occs.update(current_block_index, offset);
+      // continue;
 
       const auto& found_blocks = found_block_occs.occurrences;
       const size_t num_found_blocks = found_blocks.size();
@@ -474,8 +532,9 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
         (*level_data.counters)[current_block_index + 1] +=
             is_back_block && (offset > 0);
       }
+      links.erase(found);
       // TODO found may not be handled again!
-      found_block_occs.handled = true;
+      // found_block_occs.handled = true;
     }
   }
 
