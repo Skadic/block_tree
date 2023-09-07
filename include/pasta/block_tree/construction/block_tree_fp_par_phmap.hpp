@@ -81,6 +81,10 @@ public:
   size_t bp_markings_ns = 0;
   size_t bp_bitvec_ns = 0;
 
+  size_t b_hash_blocks_ns = 0;
+  size_t b_scan_blocks_ns = 0;
+  size_t b_update_blocks_ns = 0;
+
 private:
   /// @brief Contains data about a block tree level under construction
   struct LevelData {
@@ -187,18 +191,29 @@ private:
                          Clock::now() - now)
                          .count();
     }
+    TimePoint now = Clock::now();
 
+    prune(levels);
+    size_t prune_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    now = Clock::now();
+    make_tree(text, levels, padding);
+    size_t make_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
     std::cout << "pairs: " << (pairs_ns / 1'000'000)
               << "ms,\n\thash pairs: " << (bp_hash_pairs_ns / 1'000'000)
               << "ms,\n\tscan pairs: " << (bp_scan_pairs_ns / 1'000'000)
               << "ms,\n\tmarkings: " << (bp_markings_ns / 1'000'000)
               << "ms,\n\tbitvec: " << (bp_bitvec_ns / 1'000'000)
               << "ms,\nblocks: " << (blocks_ns / 1'000'000)
-              << "ms,\ngenerate: " << (generate_ns / 1'000'000) << "ms"
-              << std::endl;
-
-    prune(levels);
-    make_tree(text, levels, padding);
+              << "ms,\n\thash blocks: " << (b_hash_blocks_ns / 1'000'000)
+              << "ms,\n\tscan blocks: " << (b_scan_blocks_ns / 1'000'000)
+              << "ms,\n\tupdate blocks: " << (b_update_blocks_ns / 1'000'000)
+              << "ms,\ngenerate_next: " << (generate_ns / 1'000'000)
+              << "ms,\nprune: " << (prune_ns / 1'000'000)
+              << "ms,\nmake: " << (make_ns / 1'000'000) << "ms" << std::endl;
   }
 
   /// @brief Returns the ceiling of x / y for x > 0;
@@ -302,7 +317,7 @@ private:
           std::max<size_t>(1, ceil_div(num_block_pairs, omp_get_num_threads()));
       const size_t thread_id = omp_get_thread_num();
 
-      // Start and end index of the
+      // Start and end index of the current thread's segment
       const auto start = thread_id * segment_size;
       const auto end =
           std::min<size_t>(num_block_pairs, (thread_id + 1) * segment_size);
@@ -330,11 +345,7 @@ private:
     sdsl::int_vector<2> markings(level.num_blocks, 0);
     for (auto it = map.begin(); it != map.end(); ++it) {
       const PairOccurrences& pair_occs = it->second;
-      const auto& block_indices = pair_occs.occurrences;
-      for (auto list_it = block_indices.cbegin();
-           list_it != block_indices.cend();
-           ++list_it) {
-        const size_type occ = *list_it;
+      for (const size_type occ : pair_occs.occurrences) {
         if (pair_occs.first_occ_block < occ) {
           markings[occ] = markings[occ] | 0b10;
           markings[occ + 1] = markings[occ + 1] | 0b01;
@@ -391,13 +402,35 @@ private:
   }
 
   struct BlockOccurrences {
-    size_type first_occ_block;
-    size_type first_occ_offset;
-    std::vector<size_type> occurrences;
+    struct FirstOccurrence {
+      /// @brief Block index of the first occurrence of the block's content
+      size_type block;
+      /// @brief The offset into the block at which that first occurrence occurs
+      size_type offset;
+
+      inline FirstOccurrence(size_type first_occ_block_,
+                             size_type first_occ_offset_)
+          : block(first_occ_block_),
+            offset(first_occ_offset_) {}
+    };
+
+    std::atomic<FirstOccurrence> first_occ;
+
+    /// @brief A list of block indices in which the content of the hashed block
+    /// occurs
+    std::list<size_type> occurrences;
+
     BlockOccurrences(size_type first_occ_block_)
-        : first_occ_block(first_occ_block_),
-          first_occ_offset(0),
+        : first_occ({first_occ_block_, 0}),
           occurrences() {}
+
+    BlockOccurrences(const BlockOccurrences& other)
+        : first_occ(other.first_occ.load()),
+          occurrences(other.occurrences) {}
+
+    BlockOccurrences(BlockOccurrences&& other)
+        : first_occ(other.first_occ.load()),
+          occurrences(std::move(other.occurrences)) {}
 
     inline void add_block(size_type block_index) {
       occurrences.push_back(block_index);
@@ -408,11 +441,12 @@ private:
     /// @param block_index The block index of an occurrence
     /// @param block_index The offset of that occurrence
     inline void update(size_type block_index, size_type block_offset) {
-      if (block_index < first_occ_block ||
-          (first_occ_block == block_index && block_offset < first_occ_offset)) {
-        first_occ_block = block_index;
-        first_occ_offset = block_offset;
+      FirstOccurrence prev_first_occ = this->first_occ.load();
+      FirstOccurrence set(block_index, block_offset);
+      while (block_index < prev_first_occ.block &&
+             !first_occ.compare_exchange_weak(prev_first_occ, set)) {
       }
+      //||(first_occ_block == block_index && block_offset < first_occ_offset)) {
     }
   };
 
@@ -423,12 +457,10 @@ private:
   /// @param level_data The data for the current level
   /// @param is_padded true, iff the last block of the level extends past the
   ///   end of the text
-  static void scan_blocks(const std::vector<input_type>& s,
-                          LevelData& level_data,
-                          const bool is_padded) {
-    const size_t block_size = level_data.block_size;
+  void scan_blocks(const std::vector<input_type>& text,
+                   LevelData& level_data,
+                   const bool is_padded) {
     const size_t num_blocks = level_data.num_blocks;
-    const std::vector<size_type>& block_starts = *level_data.block_starts;
 
     level_data.pointers =
         std::make_unique<std::vector<size_type>>(num_blocks, NO_EARLIER_OCC);
@@ -446,41 +478,100 @@ private:
     // In addition to the vector, there is a boolean which denotes whether a
     // hash has already been processed
     RabinKarpMap<BlockOccurrences> links(num_blocks);
-    for (size_t i = 0; i < num_blocks - is_padded; ++i) {
-      const RabinKarpHash hash =
-          RabinKarp(s, SIGMA, block_starts[i], block_size, K_PRIME)
-              .current_hash();
-      links.insert({hash, BlockOccurrences(i)});
-      auto& [found_hash, occs] = *links.find(hash);
-      occs.occurrences.push_back(i);
-    }
 
-    const size_t num_total_iterations = num_blocks - is_padded - 1;
-    // #pragma omp parallel
+    TimePoint now = Clock::now();
+
+#pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
+    shared(level_data, text, links, now, is_padded, std::cout)
     {
-      const size_t thread_id = 0; // omp_get_thread_num();
+      const std::vector<size_type>& block_starts = *level_data.block_starts;
+#pragma omp single
+      for (size_type i = 0; i < level_data.num_blocks - is_padded; ++i) {
+        const RabinKarp rk(text,
+                           SIGMA,
+                           block_starts[i],
+                           level_data.block_size,
+                           K_PRIME);
+        const RabinKarpHash hash = rk.current_hash();
+#pragma omp critical
+        {
+          auto ptr = links.find(hash);
+          if (ptr == links.end()) {
+            auto [insert_ptr, _] = links.emplace(hash, BlockOccurrences(i));
+            ptr = insert_ptr;
+          }
+
+          ptr->second.add_block(i);
+          ptr->second.update(i, 0);
+        }
+      }
+#pragma omp barrier
+
+#pragma omp single
+      {
+        b_hash_blocks_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
+                                                                 now)
+                .count();
+        now = Clock::now();
+      }
+
+      const size_t num_total_iterations = level_data.num_blocks - is_padded - 1;
+
+      const size_t thread_id = omp_get_thread_num();
       const size_t segment_size =
-          ceil_div(num_total_iterations, 1); // omp_get_num_threads());
+          ceil_div(num_total_iterations, omp_get_num_threads());
       const size_t start = thread_id * segment_size;
       const size_t end = std::min<size_t>(num_total_iterations,
                                           (thread_id + 1) * segment_size);
-      // Hash every window and find the first occurrences for every block.
-      if (start < block_starts.size()) {
-        RabinKarp rk(s, SIGMA, block_starts[start], block_size, K_PRIME);
-        for (size_t current_block_index = start; current_block_index < end;
-             ++current_block_index) {
-          if (static_cast<int64_t>(rk.init_) !=
-              block_starts[current_block_index]) {
-            rk.restart(block_starts[current_block_index]);
-          }
 
-          if (level_data.next_is_adjacent(current_block_index)) {
-            scan_windows_in_block(rk, links, level_data, current_block_index);
+      // Hash every window and find the first occurrences for every block.
+      if (start < block_starts.size() - is_padded) {
+        RabinKarp rk(text,
+                     SIGMA,
+                     block_starts[start],
+                     level_data.block_size,
+                     K_PRIME);
+        for (size_t i = start; i < end; ++i) {
+          if (!level_data.next_is_adjacent(i)) {
             continue;
           }
+          if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
+            rk.restart(block_starts[i]);
+          }
+          scan_windows_in_block(rk, links, level_data, i);
         }
       }
+#pragma omp barrier
     }
+    b_scan_blocks_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    now = Clock::now();
+
+    // By this point, the map should contain the first occurrences of every
+    // respective block's content. We then fill the pointers and offsets with
+    // this data and increment counters accordingly
+    for (auto it = links.cbegin(); it != links.cend(); ++it) {
+      // The occurrences of all blocks with a given hash
+      const BlockOccurrences& occs = it->second;
+      for (const size_type occ : occs.occurrences) {
+        auto first_occ = occs.first_occ.load();
+        if (occ == first_occ.block ||
+            (first_occ.offset > 0 && occ == first_occ.block + 1)) {
+          continue;
+        }
+        (*level_data.pointers)[occ] = first_occ.block;
+        (*level_data.offsets)[occ] = first_occ.offset;
+        const bool is_back_block = !(*level_data.is_internal)[occ];
+        (*level_data.counters)[first_occ.block] += 1;
+        (*level_data.counters)[first_occ.block + 1] +=
+            is_back_block && (first_occ.offset > 0);
+      }
+    }
+    b_update_blocks_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
   }
   /// @brief Scans through block-sized windows starting inside one block and
   ///     tries to find earlier occurrences of blocks. Non-internal blocks will
@@ -496,7 +587,6 @@ private:
                                     RabinKarpMap<BlockOccurrences>& links,
                                     LevelData& level_data,
                                     const size_type current_block_index) {
-    const BitVector& is_internal = *level_data.is_internal;
     for (size_type offset = 0; offset < level_data.block_size;
          ++offset, rk.next()) {
       const RabinKarpHash hash = rk.current_hash();
@@ -505,36 +595,10 @@ private:
       if (found == links.end()) {
         continue;
       }
-      auto& [block_hash, found_block_occs] = *found;
-
-      // found_block_occs.update(current_block_index, offset);
-      // continue;
-
-      const auto& found_blocks = found_block_occs.occurrences;
-      const size_t num_found_blocks = found_blocks.size();
-      // In this case, we are hashing an actual block right now (not just an
-      // arbitrary window). As a result, the first block in the vector is the
-      // block we are currently hashing in
-      for (size_t i = 0; i < num_found_blocks; ++i) {
-        const size_type block_index = found_blocks[i];
-        if (block_index == current_block_index ||
-            (offset > 0 && block_index == current_block_index + 1)) {
-          continue;
-        }
-        (*level_data.pointers)[block_index] = current_block_index;
-        (*level_data.offsets)[block_index] = offset;
-        // We increment the counter for the block that is being pointed to
-        // if the current block is actually a back block
-        // If the offset is greater than 0,
-        // then it also overlaps into the next block
-        const bool is_back_block = !is_internal[block_index];
-        (*level_data.counters)[current_block_index] += is_back_block;
-        (*level_data.counters)[current_block_index + 1] +=
-            is_back_block && (offset > 0);
-      }
-      links.erase(found);
-      // TODO found may not be handled again!
-      // found_block_occs.handled = true;
+      //
+      // TODO This must be thread safe
+      found->second.update(current_block_index, offset);
+      continue;
     }
   }
 
@@ -941,7 +1005,7 @@ public:
     }
     return true;
   }
-};
+}; // namespace pasta
 
 } // namespace pasta
 

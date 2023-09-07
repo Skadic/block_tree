@@ -126,9 +126,9 @@ int main(int argc, char** argv) {
   std::cout << "bt size: " << bt->print_space_usage() / 1000 << "kb\n"
             << "Time: " << elapsed << "ms" << std::endl;
 
-  // std::ofstream ot(out_path);
-  //  bt->serialize(ot);
-  #pragma omp parallel for
+// std::ofstream ot(out_path);
+//  bt->serialize(ot);
+#pragma omp parallel for
   for (size_t i = 0; i < text.size(); ++i) {
     const auto c = bt->access(i);
     if (c != text[i]) {
