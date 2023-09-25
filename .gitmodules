@@ -16,3 +16,12 @@
 [submodule "extlib/parallel-hashmap"]
 	path = extlib/parallel-hashmap
 	url = git@github.com:greg7mdp/parallel-hashmap.git
+[submodule "extlib/waitfree-mpsc-queue"]
+	path = extlib/waitfree-mpsc-queue
+	url = https://github.com/dbittman/waitfree-mpsc-queue
+[submodule "extlib/Jiffy"]
+	path = extlib/Jiffy
+	url = https://github.com/DolevAdas/Jiffy
+[submodule "fastwfc"]
+	path = extlib/fastwfc/fast-wait-free-queue
+	url = https://github.com/chaoran/fast-wait-free-queue

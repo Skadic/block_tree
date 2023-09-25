@@ -68,6 +68,16 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/robin-hood-hashing)
 
+add_library(waitfree-mpsc-queue
+        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/waitfree-mpsc-queue/mpsc.c)
+target_include_directories(waitfree-mpsc-queue PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/waitfree-mpsc-queue)
+
+
+add_library(jiffy INTERFACE)
+target_include_directories(jiffy INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/Jiffy)
+
 add_library(pasta_block_tree INTERFACE)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -77,7 +87,9 @@ target_link_libraries(pasta_block_tree INTERFACE
         pasta_bit_vector
         sdsl
         tlx
-        robin_hood)
+        robin_hood
+        waitfree-mpsc-queue
+        jiffy)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/growt)
 target_include_directories(pasta_block_tree INTERFACE
