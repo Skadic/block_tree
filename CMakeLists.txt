@@ -77,6 +77,9 @@ target_include_directories(waitfree-mpsc-queue PUBLIC
 add_library(jiffy INTERFACE)
 target_include_directories(jiffy INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/Jiffy)
+add_library(jiffy1 INTERFACE)
+target_include_directories(jiffy1 INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/Jiffy-1)
 
 add_library(pasta_block_tree INTERFACE)
 target_include_directories(pasta_block_tree INTERFACE
@@ -89,7 +92,8 @@ target_link_libraries(pasta_block_tree INTERFACE
         tlx
         robin_hood
         waitfree-mpsc-queue
-        jiffy)
+        #jiffy
+        jiffy1)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/growt)
 target_include_directories(pasta_block_tree INTERFACE

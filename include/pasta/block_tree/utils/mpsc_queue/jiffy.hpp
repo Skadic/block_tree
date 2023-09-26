@@ -31,6 +31,8 @@ class JiffyQueue {
   bool space_available_;
   std::condition_variable enqueue_cv_;
   std::mutex enqueue_mtx_;
+  std::condition_variable dequeue_cv_;
+  std::mutex dequeue_mtx_;
 
 public:
   explicit JiffyQueue(size_t capacity, size_t)
@@ -39,7 +41,9 @@ public:
         capacity_(capacity),
         space_available_(capacity > 0),
         enqueue_cv_(),
-        enqueue_mtx_() {}
+        enqueue_mtx_(),
+        dequeue_cv_(),
+        dequeue_mtx_() {}
 
   JiffyQueue(JiffyQueue&& other) noexcept
       : queue_(std::move(other.queue_)),
@@ -47,7 +51,9 @@ public:
         capacity_(other.capacity_),
         space_available_(other.space_available_),
         enqueue_cv_(),
-        enqueue_mtx_() {}
+        enqueue_mtx_(),
+        dequeue_cv_(),
+        dequeue_mtx_() {}
 
   ~JiffyQueue() {
     while (size() > 0) {
@@ -57,20 +63,37 @@ public:
 
   bool enqueue(std::unique_ptr<T>&& elem) {
     std::unique_lock<std::mutex> lock(enqueue_mtx_);
-    enqueue_cv_.wait(lock, [this] { return this->space_available_; });
-    const size_t size = size_.load();
-    space_available_ = size + 1 < capacity_;
-    assert(size < capacity_);
+    const bool can_insert =
+        enqueue_cv_.wait_for(lock, std::chrono::milliseconds(1), [this] {
+          return size() < capacity_;
+        });
+    if (!can_insert) {
+      return false;
+    }
+    assert(size() < capacity_);
     size_.fetch_add(1);
     queue_->enqueue(*elem.release());
+    dequeue_cv_.notify_one();
     return true;
   }
 
   std::unique_ptr<T> dequeue() {
+    std::unique_lock<std::mutex> lock(enqueue_mtx_);
+    const bool can_dequeue =
+        dequeue_cv_.wait_for(lock, std::chrono::milliseconds(10), [this] {
+          return size() > 0;
+        });
+    if (!can_dequeue) {
+      return std::unique_ptr<T>(nullptr);
+    }
+    assert(size() > 0);
+    const auto size = size_.fetch_sub(1) - 1;
     T* t = new T;
-    size_.fetch_sub(1);
-    queue_->dequeue(*t);
-    this->space_available_ = true;
+    const bool queue_was_not_empty = queue_->dequeue(*t);
+    if (!queue_was_not_empty) {
+      std::cout << "Size is " << size << std::endl;
+      assert(queue_was_not_empty);
+    }
     enqueue_cv_.notify_one();
     return std::unique_ptr<T>(static_cast<T*>(t));
   }

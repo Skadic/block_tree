@@ -435,6 +435,7 @@ private:
     shared(level, map, text, now, is_padded, std::cout, num_threads_finished)
     {
       const size_t thread_id = omp_get_thread_num();
+      typename BlockPairMap::Shard shard = map.get_shard(thread_id);
       const size_t num_threads = omp_get_num_threads();
       const size_t block_size = level.block_size;
       const size_t pair_size = 2 * block_size;
@@ -462,9 +463,9 @@ private:
         RabinKarpHash hash = rk.current_hash();
         // Try to find the hash in the map, insert a new entry if it doesn't
         // exist, and add the current block to the entry
-        map.insert(hash, i);
-        if (map.should_handle_queue(thread_id)) {
-          map.handle_queue(thread_id);
+        shard.insert(hash, i);
+        if (shard.should_handle_queue()) {
+          shard.handle_queue();
         }
       }
       num_threads_finished.fetch_add(1);
@@ -472,7 +473,7 @@ private:
       // we need all threads to wait for the others to finish the loop and
       // handle thread events that might come in from the other threads
       do {
-        map.handle_queue(thread_id);
+        shard.handle_queue();
       } while (num_threads_finished.load() < num_threads);
 #pragma omp barrier
 #pragma omp single
@@ -603,16 +604,11 @@ private:
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_threads_finished = 0;
 #pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
-    shared(level_data,                                                         \
-               text,                                                           \
-               links,                                                          \
-               now,                                                            \
-               is_padded,                                                      \
-               num_threads_finished,                                           \
-               std::cout)
+    shared(level_data, text, links, now, is_padded, num_threads_finished)
     {
       const size_t num_threads = omp_get_num_threads();
       const size_t thread_id = omp_get_thread_num();
+      typename BlockMap::Shard shard = links.get_shard(thread_id);
       const size_t block_size = level_data.block_size;
       const std::vector<size_type>& block_starts = *level_data.block_starts;
       // Number of total iterations the for loop should do
@@ -633,10 +629,10 @@ private:
       for (size_t i = start; i < end; ++i) {
         const RabinKarp rk(text, SIGMA, block_starts[i], block_size, PRIME);
         RabinKarpHash hash = rk.current_hash();
-        links.insert(hash, {i, 0});
+        shard.insert(hash, {i, 0});
         // The thread checks whether it should handle the inserts in its queue
-        if (links.should_handle_queue(thread_id)) {
-          links.handle_queue(thread_id);
+        if (shard.should_handle_queue()) {
+          shard.handle_queue();
         }
       }
       num_threads_finished.fetch_add(1);
@@ -644,7 +640,7 @@ private:
       // we need all threads to wait for the others to finish the loop and
       // handle thread events that might come in from the other threads
       do {
-        links.handle_queue(thread_id);
+        shard.handle_queue();
       } while (num_threads_finished.load() < num_threads);
 #pragma omp single
       {

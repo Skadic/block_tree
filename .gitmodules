@@ -25,3 +25,7 @@
 [submodule "fastwfc"]
 	path = extlib/fastwfc/fast-wait-free-queue
 	url = https://github.com/chaoran/fast-wait-free-queue
+[submodule "extlib/Jiffy-1"]
+	path = extlib/Jiffy-1
+	url = https://github.com/quininer/Jiffy-1
+	branch = fix-atomic

@@ -118,38 +118,15 @@ class ShardedMap {
   std::vector<SeqHashMap> map_;
   /// @brief Contains a boolean for each thread, that is true,
   /// iff the fill_threshold is met.
-  std::vector<bool> threshold_met_;
+  std::vector<char> threshold_met_;
   /// @brief Contains a task queue for each thread, holding insert
   /// operations for each thread.
   std::vector<Queue> task_queue_;
-
-  std::vector<size_t> queue_empty_space_;
-  std::vector<std::condition_variable> queue_cvs_;
 
   [[nodiscard]] bool threshold_exceeded(const size_t thread_id) const {
     return static_cast<double>(task_queue_[thread_id].size()) /
                static_cast<double>(task_queue_[thread_id].capacity()) >=
            fill_threshold_;
-  }
-
-  /// @brief Inserts or updates a new value in the map, depending on whether
-  /// @param k The key to insert or update a value for.
-  /// @param in_value The value with which to insert or update.
-  /// @param thread_id
-  inline void
-  insert_or_update_direct(K& k, InputValue&& in_value, const size_t thread_id) {
-    assert(thread_id == static_cast<size_t>(omp_get_thread_num()));
-    auto res = map_[thread_id].find(k);
-    if (res == map_[thread_id].end()) {
-      // If the value does not exist, insert it
-      V initial = UpdateFn::init(k, std::move(in_value));
-      K key = k;
-      map_[thread_id].emplace(key, std::move(initial));
-    } else {
-      // Otherwise, update it.
-      V& val = res->second;
-      UpdateFn::update(k, val, std::move(in_value));
-    }
   }
 
 public:
@@ -178,87 +155,104 @@ public:
     }
   }
 
-  /// @brief Waits for another thread to handle its queue,
-  ///     this thread handling its own queue in the meantime.
-  /// @param current_thread_id The current thread's id.
-  /// @param target_thread_id The id of the thread to wait for.
-  void busy_wait(size_t current_thread_id, size_t target_thread_id) {
-    while (task_queue_[target_thread_id].size() ==
-           task_queue_[target_thread_id].capacity()) {
-      handle_queue(current_thread_id);
-      std::this_thread::yield();
+  class Shard {
+    ShardedMap& sharded_map_;
+    const size_t thread_id_;
+    SeqHashMap& map_;
+    char& threshold_met_;
+    Queue& task_queue_;
+
+  public:
+    Shard(ShardedMap& sharded_map, size_t thread_id)
+        : sharded_map_(sharded_map),
+          thread_id_(thread_id),
+          map_(sharded_map_.map_[thread_id]),
+          threshold_met_(sharded_map_.threshold_met_[thread_id]),
+          task_queue_(sharded_map_.task_queue_[thread_id]) {}
+
+    /// @brief Inserts or updates a new value in the map, depending on whether
+    /// @param k The key to insert or update a value for.
+    /// @param in_value The value with which to insert or update.
+    inline void insert_or_update_direct(K& k, InputValue&& in_value) {
+      auto res = map_.find(k);
+      if (res == map_.end()) {
+        // If the value does not exist, insert it
+        V initial = UpdateFn::init(k, std::move(in_value));
+        K key = k;
+        map_.emplace(key, std::move(initial));
+      } else {
+        // Otherwise, update it.
+        V& val = res->second;
+        UpdateFn::update(k, val, std::move(in_value));
+      }
     }
-  }
 
-  /// @brief Inserts or updates a new value in the map.
-  ///
-  /// If the value is inserted into the current thread's map,
-  /// it is inserted immediately. If not, then it is added to that thread's
-  /// queue. It will only be inserted into the map, once the thread comes around
-  /// to handle its queue using the handle_queue method.
-  ///
-  /// @param pair The key-value pair to insert or update.
-  void insert(std::pair<K, InputValue>&& pair) {
-    const size_t current_thread_id = omp_get_thread_num();
-    const size_t hash = Hasher{}(pair.first);
-    const size_t target_thread_id = hash % thread_count_;
-
-    // Otherwise enqueue the new value in the target thread
-    Queue& q = task_queue_[target_thread_id];
-    while (q.size() == q.capacity()) {
-      handle_queue(current_thread_id);
-      //  busy_wait(current_thread_id, target_thread_id);
+    /// @brief Handles this thread's queue, inserting or updating all values in
+    ///     its queue.
+    void handle_queue() {
+      if (task_queue_.size() == 0) {
+        return;
+      }
+      while (task_queue_.size() > 0) {
+        std::unique_ptr<std::pair<K, InputValue>> pair = task_queue_.dequeue();
+        assert(pair != nullptr);
+        insert_or_update_direct(pair->first, std::move(pair->second));
+      }
+      threshold_met_ = false;
     }
-    while (!q.enqueue(
-        std::make_unique<std::pair<K, InputValue>>(std::move(pair)))) {
-      handle_queue(current_thread_id);
-    };
 
-    // If the fill threshold is exceeded, mark it as such
-    threshold_met_[target_thread_id] = threshold_exceeded(target_thread_id);
-  }
+    /// @brief Inserts or updates a new value in the map.
+    ///
+    /// If the value is inserted into the current thread's map,
+    /// it is inserted immediately. If not, then it is added to that thread's
+    /// queue. It will only be inserted into the map, once the thread comes
+    /// around to handle its queue using the handle_queue method.
+    ///
+    /// @param pair The key-value pair to insert or update.
+    void insert(std::pair<K, InputValue>&& pair) {
+      const size_t hash = Hasher{}(pair.first);
+      const size_t target_thread_id = hash % sharded_map_.thread_count_;
 
-  /// @brief Inserts or updates a new value in the map.
-  ///
-  /// If the value is inserted into the current thread's map,
-  /// it is inserted immediately. If not, then it is added to that thread's
-  /// queue. It will only be inserted into the map, once the thread comes
-  /// around to handle its queue using the handle_queue method.
-  ///
-  /// @param key The key of the value to insert.
-  /// @param value The value to associate with the key.
-  inline void insert(K& key, InputValue value) {
-    insert(std::pair<K, InputValue>(key, value));
-  }
+      // Otherwise enqueue the new value in the target thread
+      Queue& q = sharded_map_.task_queue_[target_thread_id];
+      while (q.size() == q.capacity()) {
+        handle_queue();
+      }
+      while (!q.enqueue(
+          std::make_unique<std::pair<K, InputValue>>(std::move(pair)))) {
+        handle_queue();
+      };
 
-  /// @brief Determines whether this thread should handle its queue.
-  ///
-  /// This translates to whether this thread's queue's fill level exceeds the
-  ///     fill threshold.
-  /// @param current_thread_id The current thread's id.
-  /// @return `true` iff the fill threshold is exceeded.
-  bool should_handle_queue(const size_t current_thread_id) {
-    return threshold_met_[current_thread_id];
-  }
-
-  /// @brief Handles this thread's queue, inserting or updating all values in
-  ///     its queue.
-  /// @param current_thread_id The current thread's id.
-  void handle_queue(const size_t current_thread_id) {
-    assert(current_thread_id == static_cast<size_t>(omp_get_thread_num()));
-    if (task_queue_[current_thread_id].size() == 0) {
-      return;
+      // If the fill threshold is exceeded, mark it as such
+      sharded_map_.threshold_met_[target_thread_id] =
+          sharded_map_.threshold_exceeded(target_thread_id);
     }
-    Queue& q = task_queue_[current_thread_id];
-    while (q.size() > 0) {
-      std::unique_ptr<std::pair<K, InputValue>> pair = q.dequeue();
-      assert(pair != nullptr);
-      insert_or_update_direct(pair->first,
-                              std::move(pair->second),
-                              current_thread_id);
-      // std::cout << "Handling queue: " << current_thread_id << std::endl;
+
+    /// @brief Determines whether this thread should handle its queue.
+    ///
+    /// This translates to whether this thread's queue's fill level exceeds the
+    ///     fill threshold.
+    /// @return `true` iff the fill threshold is exceeded.
+    [[nodiscard]] bool should_handle_queue() const {
+      return threshold_met_;
     }
-    threshold_met_[current_thread_id] = false;
+
+    /// @brief Inserts or updates a new value in the map.
+    ///
+    /// If the value is inserted into the current thread's map,
+    /// it is inserted immediately. If not, then it is added to that thread's
+    /// queue. It will only be inserted into the map, once the thread comes
+    /// around to handle its queue using the handle_queue method.
+    ///
+    /// @param key The key of the value to insert.
+    /// @param value The value to associate with the key.
+    inline void insert(K& key, InputValue value) {
+      insert(std::pair<K, InputValue>(key, value));
+    }
+  };
+
+  Shard get_shard(const size_t thread_id) {
+    return Shard(*this, thread_id);
   }
 
   /// @brief Returns the number of key-value pairs in the map.
@@ -294,8 +288,9 @@ public:
   SeqHashMap::iterator find(const K& key) {
     const size_t hash = Hasher{}(key);
     const size_t target_thread_id = hash % thread_count_;
-    typename SeqHashMap::iterator it = map_[target_thread_id].find(key);
-    if (it == map_[target_thread_id].end()) {
+    SeqHashMap& map = map_[target_thread_id];
+    typename SeqHashMap::iterator it = map.find(key);
+    if (it == map.end()) {
       return end();
     }
     return it;
