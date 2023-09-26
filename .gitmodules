@@ -12,10 +12,10 @@
 	url = https://github.com/martinus/robin-hood-hashing
 [submodule "extlib/growt"]
 	path = extlib/growt
-	url = git@github.com:TooBiased/growt.git
+	url = https://github.com/TooBiased/growt
 [submodule "extlib/parallel-hashmap"]
 	path = extlib/parallel-hashmap
-	url = git@github.com:greg7mdp/parallel-hashmap.git
+	url = https://github.com/greg7mdp/parallel-hashmap
 [submodule "extlib/waitfree-mpsc-queue"]
 	path = extlib/waitfree-mpsc-queue
 	url = https://github.com/dbittman/waitfree-mpsc-queue
