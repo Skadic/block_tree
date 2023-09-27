@@ -67,6 +67,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/robin-hood-hashing)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite)
 
 add_library(waitfree-mpsc-queue
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/waitfree-mpsc-queue/mpsc.c)
@@ -88,10 +89,10 @@ target_include_directories(pasta_block_tree INTERFACE
 target_link_libraries(pasta_block_tree INTERFACE
         libsais
         pasta_bit_vector
-        sdsl
         tlx
         robin_hood
         waitfree-mpsc-queue
+        sdsl
         #jiffy
         jiffy1)
 target_include_directories(pasta_block_tree INTERFACE

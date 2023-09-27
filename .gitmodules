@@ -29,3 +29,6 @@
 	path = extlib/Jiffy-1
 	url = https://github.com/quininer/Jiffy-1
 	branch = fix-atomic
+[submodule "extlib/sdsl-lite"]
+	path = extlib/sdsl-lite
+	url = https://github.com/Skadic/sdsl-lite

@@ -61,6 +61,20 @@
         "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-DDEBUG -g -O3 -lprofiler",
         "CMAKE_CXX_FLAGS_DEBUG": "-DDEBUG -O0 -g -ggdb -fsanitize=address -static-libasan"
       }
+    },
+    {
+      "name": "lax",
+      "displayName": "Lax Ninja Multi-Config",
+      "description": "Use Ninja Multi-Config generator with lax warnings",
+      "generator": "Ninja Multi-Config",
+      "binaryDir": "${sourceDir}/build_lax",
+      "cacheVariables": {
+        "PASTA_BLOCK_TREE_BUILD_EXAMPLES": "ON",
+        "CMAKE_CXX_FLAGS": "-fopenmp -w -march=native -fdiagnostics-color=always",
+        "CMAKE_CXX_FLAGS_RELEASE": "-DNDEBUG -O3",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-DDEBUG -g -O3 -lprofiler",
+        "CMAKE_CXX_FLAGS_DEBUG": "-DDEBUG -O0 -g -ggdb -fsanitize=address -static-libasan"
+      }
     }
   ],
   "buildPresets": [
@@ -90,6 +104,11 @@
       "name": "debug-multi",
       "configurePreset": "ninja-multi",
       "configuration": "Debug"
+    },
+    {
+      "name": "release-lax",
+      "configurePreset": "lax",
+      "configuration": "Release"
     }
   ],
   "testPresets": [
