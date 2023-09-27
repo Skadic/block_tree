@@ -109,6 +109,11 @@
       "name": "release-lax",
       "configurePreset": "lax",
       "configuration": "Release"
+    },
+    {
+      "name": "relwithdeb-lax",
+      "configurePreset": "lax",
+      "configuration": "RelWithDebInfo"
     }
   ],
   "testPresets": [
