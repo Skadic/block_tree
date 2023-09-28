@@ -24,9 +24,14 @@
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 
+#include <robin_hood.h>
+
 __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
+
+  template<typename key_type, typename value_type, typename hash_type=std::hash<key_type>>
+  using HashMap = robin_hood::unordered_map<key_type, value_type, hash_type>;
 
 template <typename input_type, typename size_type>
 class BlockTreeFP : public BlockTree<input_type, size_type> {
@@ -315,12 +320,12 @@ public:
               : 0;
       // map block pair hashes to the text index of their occurrences
       // collecting duplicates in a vector TODO
-      std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>> pairs(
+      HashMap<MersenneHash<uint8_t>, std::vector<size_type>> pairs(
           0);
       // map block hashes to their *block* index,
       // collecting duplicates in a vector TODO
-      std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>> blocks =
-          std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>>();
+      HashMap<MersenneHash<uint8_t>, std::vector<size_type>> blocks =
+          HashMap<MersenneHash<uint8_t>, std::vector<size_type>>();
       // iterate through all blocks on the current level, skipping over the last
       // block if it is padded
       for (uint64_t i = 0; i < block_text_inx.size() - last_block_padded; i++) {
@@ -599,7 +604,7 @@ public:
         auto &ptr = *p;
         auto &off = *o;
         // Maps block index => number of pruned blocks before this block
-        std::unordered_map<size_type, size_type> blocks_skipped;
+        HashMap<size_type, size_type> blocks_skipped;
         auto &lvl_pass1 = *bv_marked[i];
         // Number of non-pruned blocks so far
         size_type c = 0;
@@ -715,10 +720,10 @@ public:
                                 block_size) != text.size()
               ? 1
               : 0;
-      std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>> pairs(
+      HashMap<MersenneHash<uint8_t>, std::vector<size_type>> pairs(
           0);
-      std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>> blocks =
-          std::unordered_map<MersenneHash<uint8_t>, std::vector<size_type>>();
+      HashMap<MersenneHash<uint8_t>, std::vector<size_type>> blocks =
+          HashMap<MersenneHash<uint8_t>, std::vector<size_type>>();
       for (uint64_t i = 0; i < block_text_inx.size() - last_block_padded; i++) {
         auto index = block_text_inx[i];
         MersenneRabinKarp<input_type, size_type> rk_block =
@@ -918,7 +923,7 @@ public:
         auto offset = std::vector<size_type>();
         size_type pointer_saved = 0;
         size_type pointer_skipped = 0;
-        std::unordered_map<size_type, size_type> blocks_skipped;
+        HashMap<size_type, size_type> blocks_skipped;
         size_type skip = 0;
         size_type replace = 0;
         for (uint64_t j = 0; j < bv_pass_1[pass1_i - 1]->size(); j++) {

@@ -1,10 +1,33 @@
-#pragma once
 
 #include <concepts>
 #include <cstddef>
 #include <memory>
 
 namespace pasta {
+
+/// @brief Represents an update function which given a value,
+/// updates a value in the map.
+///
+/// @tparam Fn The type of the update function.
+/// @tparam K The key type saved in the hash map.
+/// @tparam V The value type saved in the hash map.
+/// @tparam InputV The type that the update function accepts. This is not
+/// required to be the same as the map's value type.
+///
+template <typename Fn, typename K, typename V>
+concept UpdateFunction = requires(K k, V& v_lv, Fn::InputValue in_v_rv) {
+  typename Fn::InputValue;
+  // Updates a pre-existing value in the map.
+  // Arguments are the key, the value in the map,
+  // and the input value used to update the value in
+  // the map
+  { Fn::update(k, v_lv, std::move(in_v_rv)) } -> std::same_as<void>;
+  // Initialize a value from an input value
+  // Arguments are the key, and the value used to
+  // initialize the value in the map. This returns the
+  // value to be inserted into the map
+  { Fn::init(k, std::move(in_v_rv)) } -> std::convertible_to<V>;
+};
 
 namespace internal {
 using Capacity = size_t;

@@ -1,8 +1,0 @@
-//
-// Created by skadic on 26.09.23.
-//
-
-#ifndef PASTA_BLOCK_TREE_SEMAPHORE_HPP
-#define PASTA_BLOCK_TREE_SEMAPHORE_HPP
-
-#endif //PASTA_BLOCK_TREE_SEMAPHORE_HPP

@@ -59,12 +59,25 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   using Rank = pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>;
 
   /// A concurrent hash map
+  /*template <typename key_type,
+            typename value_type,
+            typename hash_type = std::hash<key_type>,
+            size_t num_submaps = 6,
+            typename mutex_type = phmap::NullMutex>
+  using HashMap = phmap::parallel_flat_hash_map<
+      key_type,
+      value_type,
+      hash_type,
+      phmap::priv::hash_default_eq<key_type>,
+      phmap::priv::Allocator<
+          typename phmap::priv::Pair<const key_type, value_type>>,
+      num_submaps,
+      mutex_type>;*/
+
   template <typename key_type,
             typename value_type,
             typename hash_type = std::hash<key_type>>
-  using HashMap =
-      phmap::parallel_node_hash_map<key_type, value_type, hash_type>;
-  // robin_hood::unordered_map<key_type, value_type, hash_type>;
+  using HashMap = robin_hood::unordered_node_map<key_type, value_type, hash_type>;
 
   /// A rabin karp hasher preconfigured for the current template parameters
   using RabinKarp = MersenneRabinKarp<input_type, size_type, MERSENNE_EXPONENT>;
@@ -72,8 +85,12 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   using RabinKarpHash = MersenneHash<input_type>;
 
   /// A hash map with rabin karp hashes as keys
-  template <typename value_type>
-  using RabinKarpMap = HashMap<RabinKarpHash, value_type>;
+  template <typename value_type,
+            size_t num_submaps = 4,
+            typename mutex_type = phmap::NullMutex>
+  using RabinKarpMap = HashMap<RabinKarpHash,
+                               value_type,
+                               std::hash<RabinKarpHash>>;
 
 public:
   size_t bp_hash_pairs_ns = 0;
@@ -193,15 +210,6 @@ private:
     }
     TimePoint now = Clock::now();
 
-    prune(levels);
-    size_t prune_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
-            .count();
-    now = Clock::now();
-    make_tree(text, levels, padding);
-    size_t make_ns =
-        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
-            .count();
     std::cout << "pairs: " << (pairs_ns / 1'000'000)
               << "ms,\n\thash pairs: " << (bp_hash_pairs_ns / 1'000'000)
               << "ms,\n\tscan pairs: " << (bp_scan_pairs_ns / 1'000'000)
@@ -211,9 +219,20 @@ private:
               << "ms,\n\thash blocks: " << (b_hash_blocks_ns / 1'000'000)
               << "ms,\n\tscan blocks: " << (b_scan_blocks_ns / 1'000'000)
               << "ms,\n\tupdate blocks: " << (b_update_blocks_ns / 1'000'000)
-              << "ms,\ngenerate_next: " << (generate_ns / 1'000'000)
-              << "ms,\nprune: " << (prune_ns / 1'000'000)
-              << "ms,\nmake: " << (make_ns / 1'000'000) << "ms" << std::endl;
+              << "ms,\ngenerate_next: " << (generate_ns / 1'000'000) << "ms,"
+              << std::endl;
+    prune(levels);
+    size_t prune_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    now = Clock::now();
+
+    std::cout << "prune: " << (prune_ns / 1'000'000) << "ms," << std::endl;
+    make_tree(text, levels, padding);
+    size_t make_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    std::cout << "make: " << (make_ns / 1'000'000) << "ms" << std::endl;
   }
 
   /// @brief Returns the ceiling of x / y for x > 0;
@@ -281,7 +300,7 @@ private:
       const size_t num_blocks = level.num_blocks;
       const size_t num_block_pairs = num_blocks - 1 - is_padded;
       const auto& block_starts = *level.block_starts;
-#pragma omp for
+#pragma omp single
       for (size_t i = 0; i < num_block_pairs; ++i) {
         // If the next block is not adjacent, we cannot hash the pair starting
         // at the current block
@@ -414,25 +433,32 @@ private:
             offset(first_occ_offset_) {}
     };
 
+    // The block index and offset of the first occurrence of this block's
+    // content
     std::atomic<FirstOccurrence> first_occ;
 
     /// @brief A list of block indices in which the content of the hashed block
     /// occurs
     std::list<size_type> occurrences;
+    std::mutex list_mutex;
 
     BlockOccurrences(size_type first_occ_block_)
         : first_occ({first_occ_block_, 0}),
-          occurrences() {}
+          occurrences(),
+          list_mutex() {}
 
     BlockOccurrences(const BlockOccurrences& other)
         : first_occ(other.first_occ.load()),
-          occurrences(other.occurrences) {}
+          occurrences(other.occurrences),
+          list_mutex() {}
 
     BlockOccurrences(BlockOccurrences&& other)
         : first_occ(other.first_occ.load()),
-          occurrences(std::move(other.occurrences)) {}
+          occurrences(std::move(other.occurrences)),
+          list_mutex() {}
 
     inline void add_block(size_type block_index) {
+      const std::lock_guard lock(list_mutex);
       occurrences.push_back(block_index);
     }
 
@@ -493,17 +519,14 @@ private:
                            level_data.block_size,
                            K_PRIME);
         const RabinKarpHash hash = rk.current_hash();
-#pragma omp critical
-        {
-          auto ptr = links.find(hash);
-          if (ptr == links.end()) {
-            auto [insert_ptr, _] = links.emplace(hash, BlockOccurrences(i));
-            ptr = insert_ptr;
-          }
-
-          ptr->second.add_block(i);
-          ptr->second.update(i, 0);
+        auto ptr = links.find(hash);
+        if (ptr == links.end()) {
+          auto [insert_ptr, _] = links.emplace(hash, BlockOccurrences(i));
+          ptr = insert_ptr;
         }
+
+        ptr->second.add_block(i);
+        ptr->second.update(i, 0);
       }
 #pragma omp barrier
 
@@ -555,8 +578,8 @@ private:
     for (auto it = links.cbegin(); it != links.cend(); ++it) {
       // The occurrences of all blocks with a given hash
       const BlockOccurrences& occs = it->second;
+      auto first_occ = occs.first_occ.load();
       for (const size_type occ : occs.occurrences) {
-        auto first_occ = occs.first_occ.load();
         if (occ == first_occ.block ||
             (first_occ.offset > 0 && occ == first_occ.block + 1)) {
           continue;
@@ -595,8 +618,6 @@ private:
       if (found == links.end()) {
         continue;
       }
-      //
-      // TODO This must be thread safe
       found->second.update(current_block_index, offset);
       continue;
     }

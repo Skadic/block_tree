@@ -1,7 +1,5 @@
 #pragma once
 
-#include "queue.hpp"
-
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>

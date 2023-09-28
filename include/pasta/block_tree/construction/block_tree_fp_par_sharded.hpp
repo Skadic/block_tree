@@ -58,7 +58,7 @@ namespace pasta {
 template <std::integral input_type,
           std::signed_integral size_type,
           template <typename> typename queue_type = StupidQueue>
-class BlockTreeFPParSharded : public BlockTree<input_type, size_type> {
+class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
   using Clock = std::chrono::high_resolution_clock;
   using TimePoint = Clock::time_point;
 
@@ -566,6 +566,7 @@ private:
       // Find the hash of the current window among the hashed block pairs.
       auto found = map.find(current_hash);
       if (found == map.end()) {
+        // TODO count how often this actually happens
         continue;
       }
       PairOccurrences& occurrences = found->second;
@@ -1054,11 +1055,11 @@ private:
   }
 
 public:
-  BlockTreeFPParSharded(const std::vector<input_type>& text,
-                        const size_t arity,
-                        const size_t root_arity,
-                        const size_t max_leaf_length,
-                        const size_t threads) {
+  BlockTreeFPParShardedSync(const std::vector<input_type>& text,
+                            const size_t arity,
+                            const size_t root_arity,
+                            const size_t max_leaf_length,
+                            const size_t threads) {
     const auto old = omp_get_max_threads();
     const auto old_dynamic = omp_get_dynamic();
     omp_set_dynamic(0);
@@ -1072,7 +1073,7 @@ public:
     omp_set_num_threads(old);
   }
 
-  ~BlockTreeFPParSharded() {
+  ~BlockTreeFPParShardedSync() {
     for (auto& rank : this->block_tree_types_rs_) {
       delete rank;
     }
