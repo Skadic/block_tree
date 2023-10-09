@@ -73,7 +73,7 @@ public:
     uint128_t sigma_c = 1;
     for (uint64_t i = init_; i < init_ + length_; i++) {
       fp = fp * sigma;
-      fp = mersenneModulo(fp + text_[i]);
+      fp = mersenneModulo(fp + text_.at(i));
     }
     for (uint64_t i = 0; i < length_ - 1; i++) {
       sigma_c = mersenneModulo(sigma_c * sigma_);

@@ -15,7 +15,7 @@ namespace pasta {
 /// required to be the same as the map's value type.
 ///
 template <typename Fn, typename K, typename V>
-concept UpdateFunction = requires(K k, V& v_lv, Fn::InputValue in_v_rv) {
+concept UpdateFunction = requires(const K& k, V& v_lv, Fn::InputValue in_v_rv) {
   typename Fn::InputValue;
   // Updates a pre-existing value in the map.
   // Arguments are the key, the value in the map,

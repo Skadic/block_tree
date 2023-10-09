@@ -24,7 +24,6 @@
 #include "pasta/block_tree/block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
-#include "pasta/block_tree/utils/mpsc_queue/jiffy.hpp"
 #include "pasta/block_tree/utils/mpsc_queue/stupid_queue.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
@@ -39,9 +38,10 @@
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 
-#define BT_NUM_THREADS 4
-#define BT_FILL_THRESHOLD 0.5
-#define BT_QUEUE_CAPACITY 1024
+#define BT_NUM_THREADS 12
+#define BT_QUEUE_CAPACITY 163840
+#define BT_DBG_PRINT
+#undef BT_DBG_PRINT
 
 __extension__ typedef unsigned __int128 uint128_t;
 
@@ -78,7 +78,8 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
   /// @brief A sequential hash map used as backing for the sharded hash map.
   template <typename key_type, typename value_type>
   using SeqHashMap =
-      robin_hood::unordered_node_map<key_type, value_type, std::hash<key_type>>;
+      robin_hood::unordered_map<key_type, value_type, std::hash<key_type>>;
+  // std::unordered_map<key_type, value_type, std::hash<key_type>>;
 
   /// @brief A rabin karp hasher preconfigured for the current template
   ///   parameters
@@ -249,7 +250,7 @@ private:
     ///   block index and updating the first occurrence if needed
     /// @param occurrences A reference to the occurrences in the map
     /// @param input_value The new block index to add to the occurrences
-    inline static void update(RabinKarpHash&,
+    inline static void update(const RabinKarpHash&,
                               PairOccurrences& occurrences,
                               InputValue&& input_value) {
       occurrences.add_block_pair(input_value);
@@ -259,7 +260,7 @@ private:
     /// @brief Initialize the occurrences of a hashed block pair
     /// @param input_value The block index of the pair's first block
     /// @return The initialized occurrences only containing the given block pair
-    inline static PairOccurrences init(RabinKarpHash&,
+    inline static PairOccurrences init(const RabinKarpHash&,
                                        InputValue&& input_value) {
       PairOccurrences occurrences(input_value);
       occurrences.add_block_pair(input_value);
@@ -280,10 +281,12 @@ private:
     /// @param occurrences A reference to the occurrences in the map
     /// @param input_value The new block index and offset to add to the
     ///   occurrences
-    inline static void update(RabinKarpHash&,
+    inline static void update(const RabinKarpHash&,
                               BlockOccurrences& occurrences,
                               InputValue&& input_value) {
+      size_t prev = occurrences.occurrences.size();
       occurrences.add_block(input_value.first);
+      assert(occurrences.occurrences.size() == prev + 1);
       occurrences.update(input_value.first, input_value.second);
     }
 
@@ -291,7 +294,7 @@ private:
     /// @param input_value A pair of the block index and offset of one of the
     ///   block's occurrences
     /// @return The initialized occurrences only containing the given block
-    inline static BlockOccurrences init(RabinKarpHash&,
+    inline static BlockOccurrences init(const RabinKarpHash&,
                                         InputValue&& input_value) {
       BlockOccurrences occurrences(input_value.first);
       occurrences.add_block(input_value.first);
@@ -339,7 +342,8 @@ private:
 
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
-      std::cout << "level " << level << std::endl;
+      std::cout << "----------------- level " << level << " -----------------"
+                << std::endl;
       LevelData& current = levels.back();
 
       TimePoint now = Clock::now();
@@ -416,14 +420,13 @@ private:
 
     // A map containing hashed block pairs mapped to their indices of the
     // pairs' first block respectively
-    BlockPairMap map(BT_FILL_THRESHOLD, BT_NUM_THREADS, BT_QUEUE_CAPACITY);
+    BlockPairMap map(BT_NUM_THREADS, BT_QUEUE_CAPACITY);
 
     TimePoint now = Clock::now();
     std::atomic_size_t num_threads_done = 0;
-    std::atomic_size_t insert_ops = 0;
+    std::atomic_size_t insert_ops;
+    insert_ops.store(0);
     std::atomic_bool last_thread_done = false;
-    std::mutex m;
-    std::condition_variable cv;
     auto& barrier = map.barrier();
 
 #pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
@@ -432,12 +435,9 @@ private:
                text,                                                           \
                now,                                                            \
                is_padded,                                                      \
-               std::cout,                                                      \
                num_threads_done,                                               \
                last_thread_done,                                               \
                insert_ops,                                                     \
-               m,                                                              \
-               cv,                                                             \
                barrier)
     {
       const size_t thread_id = omp_get_thread_num();
@@ -469,8 +469,8 @@ private:
         RabinKarpHash hash = rk.current_hash();
         // Try to find the hash in the map, insert a new entry if it doesn't
         // exist, and add the current block to the entry
-        shard.insert(hash, i, cv);
-        insert_ops.fetch_add(1, std::memory_order_acq_rel);
+        shard.insert(hash, i);
+        insert_ops.fetch_add(1, std::memory_order_seq_cst);
       }
       const size_t thread_order =
           num_threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -480,12 +480,15 @@ private:
       if (is_last_thread) {
         last_thread_done.store(true, std::memory_order_release);
       }
+
+      // Now, we handle the queue asynchronously
+      while (!last_thread_done.load(std::memory_order::acquire)) {
+        shard.handle_queue_sync(false);
+      }
       barrier.arrive_and_drop();
 
-      while (!last_thread_done.load(std::memory_order::acquire)) {
-        shard.handle_queue();
-      }
-
+#pragma omp barrier
+      shard.handle_queue();
 #pragma omp barrier
 #pragma omp single
       {
@@ -511,12 +514,20 @@ private:
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
 
+#ifdef BT_DBG_PRINT
     std::cout << "Pairs: " << std::endl;
     map.print_map_loads();
+    map.print_queue_upd();
     map.print_ins_upd();
     std::cout << "Size: " << map.size() << std::endl;
-    std::cout << "Insert Ops: " << insert_ops.load() << std::endl;
-    // assert(map.size() == (insert_ops.load() - map.num_updates_.load()));
+    std::cout << "Insert Cycles: " << insert_ops.load() << std::endl;
+    std::cout << "Actual Ops: "
+              << map.num_updates_.load() + map.num_inserts_.load() << std::endl;
+#endif
+    assert(map.num_updates_.load() + map.num_inserts_.load() ==
+           insert_ops.load());
+    assert(map.size() == (insert_ops.load() - map.num_updates_.load()));
+    assert(map.num_inserts_.load() == map.size());
 
     level.is_internal = std::make_unique<BitVector>(level.num_blocks);
     fill_is_internal(*level.is_internal, map);
@@ -524,12 +535,11 @@ private:
   }
 
   /// @brief Fills the bit vector `is_internal` based on the values in the
-  /// given
-  ///     map.
+  ///   given map.
   /// @param is_internal An unfilled bit vector with a bit for each block on
-  ///     this level.
+  ///   this level.
   /// @param map A map, mapping hashed block pairs to their first occurrence's
-  ///     block index.
+  ///   block index.
   void fill_is_internal(BitVector& is_internal, BlockPairMap& map) {
     const size_type num_blocks = is_internal.size();
     TimePoint now = Clock::now();
@@ -553,7 +563,6 @@ private:
     now = Clock::now();
 
     // Generate the bit vector indicating which blocks are internal
-
     is_internal[0] = true;
     is_internal[num_blocks - 1] = markings[num_blocks - 1] != 0b01;
     for (size_type i = 0; i < num_blocks - 1; ++i) {
@@ -563,6 +572,19 @@ private:
     bp_bitvec_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
+  }
+
+  template <typename K,
+            typename V,
+            template <typename, typename>
+            typename Map,
+            typename Fn>
+  void print_full_size(const SyncShardedMap<K, V, Map, Fn>& map) noexcept {
+    size_t full_size = 0;
+    map.for_each([&full_size](const K& k, const V& v) {
+      full_size += v.occurrences.size();
+    });
+    std::cout << "Full size: " << full_size << std::endl;
   }
 
   /// @brief Scan through the windows starting in a block and mark
@@ -575,7 +597,7 @@ private:
   ///   block indexes at which they occur.
   /// @param num_iterations The number of contiguous windows to hash.
   /// @param current_block_index The index of the block being currently
-  /// hashed.
+  ///   hashed.
   static inline void
   scan_windows_in_block_pair(RabinKarp& rk,
                              BlockPairMap& map,
@@ -618,7 +640,7 @@ private:
     }
 
     // A map hashing blocks and saving where they occur.
-    BlockMap links(BT_FILL_THRESHOLD, BT_NUM_THREADS, BT_QUEUE_CAPACITY);
+    BlockMap links(BT_NUM_THREADS, BT_QUEUE_CAPACITY);
 
     TimePoint now = Clock::now();
 
@@ -626,9 +648,8 @@ private:
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_threads_done = 0;
     std::atomic_bool last_thread_done = false;
-    std::mutex m;
-    std::condition_variable cv;
     auto& barrier = links.barrier();
+    BitVector tester_pivka(num_blocks, false);
 #pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
     shared(level_data,                                                         \
                text,                                                           \
@@ -638,14 +659,15 @@ private:
                num_threads_done,                                               \
                last_thread_done,                                               \
                insert_ops,                                                     \
-               cv,                                                             \
-               m,                                                              \
-               barrier)
+               barrier,                                                        \
+               tester_pivka,                                                   \
+               std::cout)
     {
       const size_t num_threads = omp_get_num_threads();
       const size_t thread_id = omp_get_thread_num();
       typename BlockMap::Shard shard = links.get_shard(thread_id);
-      const size_t block_size = level_data.block_size;
+      const size_t block_size =
+          std::min<size_t>(level_data.block_size, text.size());
       const std::vector<size_type>& block_starts = *level_data.block_starts;
       // Number of total iterations the for loop should do
       const size_t num_total_iterations = level_data.num_blocks - is_padded - 1;
@@ -656,12 +678,19 @@ private:
       const size_t end = std::min<size_t>(num_total_iterations,
                                           (thread_id + 1) * segment_size);
 
+#ifdef BT_DBG_PRINT
+      std::osyncstream(std::cout)
+          << "Thread " << thread_id << " -> start: " << start
+          << ", end: " << end << std::endl;
+#endif
+
       // Hash each block and store their hashes in the map
       for (size_t i = start; i < end; ++i) {
         const RabinKarp rk(text, SIGMA, block_starts[i], block_size, PRIME);
         RabinKarpHash hash = rk.current_hash();
-        shard.insert(hash, {i, 0}, cv);
+        shard.insert(hash, {i, 0});
         insert_ops.fetch_add(1, std::memory_order_acq_rel);
+        tester_pivka[i] = true;
       }
       const size_t thread_order =
           num_threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -670,13 +699,14 @@ private:
 
       if (is_last_thread) {
         last_thread_done.store(true, std::memory_order_release);
-        cv.notify_all();
       }
-      barrier.arrive_and_drop();
 
       while (!last_thread_done.load(std::memory_order::acquire)) {
-        shard.handle_queue();
+        shard.handle_queue_sync(false);
       }
+      barrier.arrive_and_drop();
+#pragma omp barrier
+      shard.handle_queue();
 #pragma omp barrier
 #pragma omp single
       {
@@ -685,7 +715,6 @@ private:
                                                                  now)
                 .count();
         now = Clock::now();
-        // links.print_map_loads();
       }
 
       // Hash every window and find the first occurrences for every block.
@@ -707,11 +736,29 @@ private:
             .count();
     now = Clock::now();
 
-    std::cout << "Pairs: " << std::endl;
+#ifdef BT_DBG_PRINT
+    std::cout << "Blocks: " << std::endl;
     links.print_map_loads();
+    links.print_queue_upd();
     links.print_ins_upd();
     std::cout << "Size: " << links.size() << std::endl;
-    std::cout << "Insert Ops: " << insert_ops.load() << std::endl;
+    std::cout << "Insert Cycles: " << insert_ops.load() << std::endl;
+    std::cout << "Actual Ops: "
+              << links.num_updates_.load() + links.num_inserts_.load()
+              << std::endl;
+    print_full_size(links);
+#endif
+    assert(links.num_updates_.load() + links.num_inserts_.load() ==
+           insert_ops.load());
+    assert(links.num_inserts_.load() == links.size());
+
+#ifdef BT_DBG_PRINT
+    for (size_t i = 0; i < tester_pivka.size(); ++i) {
+      if (!tester_pivka[i]) {
+        std::cout << "Block " << i << " was not inserted" << std::endl;
+      }
+    }
+#endif
 
     // By this point, the map should contain the first occurrences of every
     // respective block's content. We then fill the pointers and offsets with
@@ -725,6 +772,10 @@ private:
               continue;
             }
 
+#ifdef BT_DBG_PRINT
+            std::cout << occ << " -> " << first_occ.block << "@"
+                      << first_occ.offset << std::endl;
+#endif
             (*level_data.pointers)[occ] = first_occ.block;
             (*level_data.offsets)[occ] = first_occ.offset;
             const bool is_back_block = !(*level_data.is_internal)[occ];
@@ -733,6 +784,56 @@ private:
                 is_back_block && (first_occ.offset > 0);
           }
         });
+
+#ifdef BT_DBG_PRINT
+    for (size_t i = 0; i < num_blocks - is_padded; ++i) {
+      const RabinKarp rk(text,
+                         SIGMA,
+                         (*level_data.block_starts)[i],
+                         std::min<size_t>(level_data.block_size, text.size()),
+                         PRIME);
+      RabinKarpHash hash = rk.current_hash();
+      if ((*level_data.is_internal)[i]) {
+        continue;
+      }
+      if ((*level_data.pointers)[i] < 0) {
+        std::cout << "level " << level_data.level_index << ", block " << i
+                  << " / " << level_data.num_blocks << ", starting at "
+                  << (*level_data.block_starts)[i] << " with length "
+                  << level_data.block_size << " missing pointer, " << std::endl;
+        if (tester_pivka[i]) {
+          std::cout << "and was apparently inserted" << std::endl;
+        } else {
+          std::cout << "WASN'T inserted" << std::endl;
+        }
+        std::cout << "is: ";
+        switch (links.where(hash)) {
+          case pasta::Whereabouts::NOWHERE:
+            std::cout << "nowhere";
+            break;
+          case pasta::Whereabouts::IN_QUEUE:
+            std::cout << "in queue";
+            break;
+          case pasta::Whereabouts::IN_MAP:
+            std::cout << "in map";
+            break;
+        }
+        std::cout << std::endl;
+        auto found = links.find(hash);
+        if (found == links.end()) {
+          std::cout << "and it doesn't have an entry in the map" << std::endl;
+        } else {
+          BlockOccurrences& bo = found->second;
+          typename BlockOccurrences::FirstOccurrence fo = bo.first_occ.load();
+          std::cout << "ENTRY EXISTS:\n\tBlock: " << fo.block
+                    << "\n\tOffset: " << fo.offset << "\n\tPosition:"
+                    << ((*level_data.block_starts)[fo.block] + fo.offset)
+                    << std::endl;
+        }
+      }
+      assert((*level_data.pointers)[i] >= 0);
+    }
+#endif
 
     b_update_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
@@ -760,7 +861,8 @@ private:
       if (found == links.end()) {
         continue;
       }
-      found->second.update(current_block_index, offset);
+      BlockOccurrences& occurrences = found->second;
+      occurrences.update(current_block_index, offset);
     }
   }
 

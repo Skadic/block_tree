@@ -67,6 +67,7 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/robin-hood-hashing)
+add_definitions(-w)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite)
 
 add_library(waitfree-mpsc-queue

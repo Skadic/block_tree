@@ -70,13 +70,6 @@ int main(int argc, char** argv) {
 
   size_t leaf_length = atoi(argv[4]);
 
-  JiffyQueue<std::pair<MersenneHash<uint8_t>, std::pair<int, int>>> q(100, 8);
-
-  auto p =
-      std::make_unique<std::pair<MersenneHash<uint8_t>, std::pair<int, int>>>(
-          std::make_pair(MersenneHash<uint8_t>(), std::make_pair(0, 0)));
-  q.enqueue(std::move(p));
-
   std::stringstream ss;
   ss << argv[1] << "_arit" << arity << "_root" << root_arity << "_leaf"
      << leaf_length << "_new.bt";

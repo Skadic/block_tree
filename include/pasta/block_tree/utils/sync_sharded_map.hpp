@@ -5,32 +5,32 @@
 #include <concepts>
 #include <condition_variable>
 #include <cstddef>
-#include <latch>
 #include <omp.h>
 #include <pasta/block_tree/utils/concepts.hpp>
 #include <pasta/block_tree/utils/mpsc_queue/jiffy.hpp>
-#include <semaphore>
 #include <span>
+#include <syncstream>
 #include <unordered_map>
 #include <vector>
 
 namespace pasta {
+
+enum Whereabouts { NOWHERE, IN_MAP, IN_QUEUE };
 
 ///
 /// @brief An update function which on update just overwrites the value.
 ///
 /// @tparam K The key type saved in the hash map.
 /// @tparam V The value type saved in the hash map.
-///
 template <typename K, typename V>
-struct Overwrite {
-  using InputValue = V;
+struct [[maybe_unused]] Overwrite {
+  using InputValue [[maybe_unused]] = V;
 
-  inline static void update(K&, V& value, V&& input_value) {
+  inline static void update(const K&, V& value, V&& input_value) {
     value = input_value;
   }
 
-  inline static V init(K&, V&& input_value) {
+  inline static V init(const K&, V&& input_value) {
     return input_value;
   }
 };
@@ -43,11 +43,11 @@ struct Overwrite {
 /// @tparam V The value type saved in the hash map.
 ///
 template <typename K, typename V>
-struct Keep {
-  using InputValue = V;
-  inline static void update(K&, V&, V&&) {}
+struct [[maybe_unused]] Keep {
+  using InputValue [[maybe_unused]] = V;
+  inline static void update(const K&, V&, V&&) {}
 
-  inline static V init(K&, V&& input_value) {
+  inline static V init(const K&, V&& input_value) {
     return input_value;
   }
 };
@@ -60,8 +60,8 @@ struct Keep {
 ///     This should be compatible with std::unordered_map.
 /// @tparam UpdateFn The update function deciding how to insert or update values
 ///     in the map.
-template <typename K,
-          typename V,
+template <std::copy_constructible K,
+          std::move_constructible V,
           template <typename, typename> typename SeqHashMapType =
               std::unordered_map,
           UpdateFunction<K, V> UpdateFn = Overwrite<K, V>>
@@ -74,31 +74,28 @@ class SyncShardedMap {
   /// The type used for updates
   using InputValue = UpdateFn::InputValue;
 
+  /// The actual pair of key and value stored in the map
   using StoredValue = std::pair<K, InputValue>;
 
+  using Queue = std::span<StoredValue>;
+
+  /// The memory order namespace from the standard library
   using mem = std::memory_order;
 
-  /// @brief A value between 0 and 1, determining to which extent
-  /// each thread's queue should be filled, before the thread is signaled to
-  /// handle its queued operations.
-  ///
-  /// If this value is 0.25, then the thread's value in threshold_met_
-  /// is set to true, signaling that the thread should handle its requests
-  /// in task_queue_
-  const double fill_threshold_;
   /// @brief The number of threads operating on this map.
   const size_t thread_count_;
   /// @brief Contains a hash map for each thread
   std::vector<SeqHashMap> map_;
   /// @brief Contains a task queue for each thread, holding insert
-  /// operations for each thread.
-  std::vector<std::vector<StoredValue>> task_queue_;
+  ///   operations for each thread.
+  std::vector<Queue> task_queue_;
+  std::vector<Queue> task_queue_swap_;
   /// @brief Contains the number of tasks in each thread's queue.
   std::span<std::atomic_size_t> task_count_;
   /// @brief Contains the number of threads currently handling their queues.
-  /// This is used 1. signal to other threads that they should handle their
-  /// queue, and 2. to keep track of whether all threads have handled their
-  /// queues.
+  ///   This is used 1. signal to other threads that they should handle their
+  ///   queue, and 2. to keep track of whether all threads have handled their
+  ///   queues.
   std::atomic_size_t threads_handling_queue_;
 
   constexpr static std::invocable auto FN = []() noexcept {
@@ -106,12 +103,14 @@ class SyncShardedMap {
 
   std::barrier<decltype(FN)> barrier_;
 
+  std::mutex mtx_;
+
   /// https://zimbry.blogspot.com/2011/09/better-bit-mixing-improving-on.html
   inline uint64_t mix_select(uint64_t key) {
-    key ^= (key >> 33);
-    key *= 0xff51afd7ed558ccd;
-    key ^= (key >> 33);
-    key *= 0xc4ceb9fe1a85ec53;
+    key ^= (key >> 31);
+    key *= 0x7fb5d329728ea185;
+    key ^= (key >> 27);
+    key *= 0x81dadef4bc2dd44d;
     key ^= (key >> 33);
     return key % thread_count_;
   }
@@ -119,8 +118,6 @@ class SyncShardedMap {
 public:
   std::atomic_size_t num_updates_;
   std::atomic_size_t num_inserts_;
-
-  std::condition_variable aa;
   //
   /// @brief Creates a new sharded map.
   ///
@@ -129,40 +126,48 @@ public:
   /// @param thread_count The exact number of threads working on this map.
   /// @param queue_capacity The maximum amount of tasks allowed in each queue.
   ///
-  SyncShardedMap(double fill_threshold,
-                 size_t thread_count,
-                 size_t queue_capacity)
-      : fill_threshold_(fill_threshold),
-        thread_count_(thread_count),
+  SyncShardedMap(size_t thread_count, size_t queue_capacity)
+      : thread_count_(thread_count),
         map_(),
         task_queue_(),
         task_count_(),
         threads_handling_queue_(0),
         barrier_(thread_count, FN),
-        aa() {
-    assert(0 <= fill_threshold && fill_threshold <= 1);
+        num_updates_(0),
+        num_inserts_(0),
+        mtx_() {
     map_.reserve(thread_count);
     task_queue_.reserve(thread_count);
-    auto* task_arr = new std::atomic_size_t[thread_count];
-    task_count_ = std::span<std::atomic_size_t>(task_arr, thread_count);
+    task_queue_swap_.reserve(thread_count);
+    task_count_ =
+        std::span<std::atomic_size_t>(new std::atomic_size_t[thread_count],
+                                      thread_count);
     for (size_t i = 0; i < thread_count; i++) {
       map_.emplace_back();
-      task_queue_.emplace_back(queue_capacity);
+      task_queue_.emplace_back(new StoredValue[queue_capacity], queue_capacity);
+      task_queue_swap_.emplace_back(new StoredValue[queue_capacity],
+                                    queue_capacity);
       task_count_[i] = 0;
     }
   }
 
   ~SyncShardedMap() {
     delete[] task_count_.data();
+    for (auto& queue : task_queue_) {
+      delete[] queue.data();
+    }
+    for (auto& queue : task_queue_swap_) {
+      delete[] queue.data();
+    }
   }
 
   class Shard {
     SyncShardedMap& sharded_map_;
     const size_t thread_id_;
     SeqHashMap& map_;
-    std::vector<StoredValue>& task_queue_;
+    Queue& task_queue_;
+    Queue& task_queue_swap_;
     std::atomic_size_t& task_count_;
-    size_t last_cycle;
 
   public:
     Shard(SyncShardedMap& sharded_map, size_t thread_id)
@@ -170,19 +175,22 @@ public:
           thread_id_(thread_id),
           map_(sharded_map_.map_[thread_id]),
           task_queue_(sharded_map_.task_queue_[thread_id]),
-          task_count_(sharded_map.task_count_[thread_id]),
-          last_cycle(0) {}
+          task_queue_swap_(sharded_map_.task_queue_swap_[thread_id]),
+          task_count_(sharded_map.task_count_[thread_id]) {}
 
     /// @brief Inserts or updates a new value in the map, depending on whether
     /// @param k The key to insert or update a value for.
     /// @param in_value The value with which to insert or update.
-    inline void insert_or_update_direct(K& k, InputValue&& in_value) {
+    inline void insert_or_update_direct(const K& k, InputValue&& in_value) {
+      std::lock_guard lock(sharded_map_.mtx_);
       auto res = map_.find(k);
+      assert(k.hash_ != 0);
       if (res == map_.end()) {
         // If the value does not exist, insert it
-        V initial = UpdateFn::init(k, std::move(in_value));
         K key = k;
-        map_.emplace(key, std::move(initial));
+        V initial = UpdateFn::init(key, std::move(in_value));
+        auto [a, b] = map_.emplace(key, std::move(initial));
+        assert(b);
         sharded_map_.num_inserts_.fetch_add(1, mem::acq_rel);
       } else {
         // Otherwise, update it.
@@ -192,28 +200,44 @@ public:
       }
     }
 
-    void handle_queue_sync() {
-      sharded_map_.threads_handling_queue_.fetch_add(1, mem::seq_cst);
+    void handle_queue_sync(bool make_others_wait = true) {
+      if (make_others_wait) {
+        // If this value is >0 then other threads will also handle their queue
+        // when trying to insert
+        sharded_map_.threads_handling_queue_.fetch_add(1, mem::seq_cst);
+      }
       sharded_map_.barrier_.arrive_and_wait();
 
       handle_queue();
 
       sharded_map_.barrier_.arrive_and_wait();
-      sharded_map_.threads_handling_queue_.fetch_sub(1, mem::seq_cst);
+      if (make_others_wait) {
+        sharded_map_.threads_handling_queue_.fetch_sub(1, mem::seq_cst);
+      }
     }
 
     /// @brief Handles this thread's queue, inserting or updating all values in
     ///     its queue, waiting for other threads to be
     ///     done with their handle_queue call.
     void handle_queue() {
-      const size_t num_tasks =
-          std::min(task_count_.exchange(0, mem::acq_rel), task_queue_.size());
-      // Handle all tasks in the queue
-      for (size_t i = 0; i < num_tasks; ++i) {
-        auto entry = task_queue_[i];
-        insert_or_update_direct(entry.first, std::move(entry.second));
+      const size_t num_tasks_raw = task_count_.exchange(0, mem::seq_cst);
+      // assert(num_tasks_raw <= task_queue_.size());
+      const size_t num_tasks = std::min(num_tasks_raw, task_queue_.size());
+      if (num_tasks == 0) {
+        return;
       }
-      // All tasks are handled and this thread is done
+      std::swap(task_queue_, task_queue_swap_);
+
+      static unsigned char zeroed[sizeof(StoredValue)];
+      memset(&zeroed, 0, sizeof(StoredValue));
+      //  Handle all tasks in the queue
+      for (size_t i = 0; i < num_tasks; ++i) {
+        // bool is_eq = memcmp(zeroed, &task_queue_swap_[i],
+        // sizeof(StoredValue)); assert(!"hello" || is_eq);
+        auto& entry = task_queue_swap_[i];
+        insert_or_update_direct(entry.first, std::move(entry.second));
+        // memset(&task_queue_swap_[i], 0, sizeof(StoredValue));
+      }
     }
 
     /// @brief Inserts or updates a new value in the map.
@@ -224,36 +248,53 @@ public:
     /// around to handle its queue using the handle_queue method.
     ///
     /// @param pair The key-value pair to insert or update.
-    void insert(StoredValue&& pair, std::condition_variable& cv) {
-      if (sharded_map_.threads_handling_queue_.load(mem::acquire) > 0) {
-        handle_queue_sync();
-      }
+    void insert(StoredValue&& pair) {
       const size_t hash = Hasher{}(pair.first);
       const size_t target_thread_id = sharded_map_.mix_select(hash);
+      if (target_thread_id == thread_id_) {
+        // If the target thread is this thread, insert the value directly
+        insert_or_update_direct(pair.first, std::move(pair.second));
+        if (sharded_map_.threads_handling_queue_.load(mem::seq_cst) > 0) {
+          handle_queue_sync();
+        }
+        return;
+      }
 
       // Otherwise enqueue the new value in the target thread
-      std::vector<StoredValue>& q = sharded_map_.task_queue_[target_thread_id];
+      Queue* q = &sharded_map_.task_queue_[target_thread_id];
       std::atomic_size_t& target_task_count =
           sharded_map_.task_count_[target_thread_id];
-      size_t task_idx = target_task_count.fetch_add(1, mem::seq_cst);
+      // size_t task_idx = target_task_count.fetch_add(1, mem::seq_cst);
+
+      sharded_map_.mtx_.lock();
+      size_t task_idx = target_task_count.load(mem::seq_cst);
       // If the target queue is full, signal to the other threads, that they
       // need to handle their queue and handle this thread's queue
-      if (task_idx >= q.size() ||
-          sharded_map_.threads_handling_queue_.load(mem::acquire)) {
+      if (task_idx >= sharded_map_.task_queue_[target_thread_id].size() ||
+          sharded_map_.threads_handling_queue_.load(mem::seq_cst) > 0) {
+        sharded_map_.mtx_.unlock();
+        // Since we incremented that thread's task count, but didn't insert
+        // anything, we need to decrement it again so that it has the correct
+        // value
+        // target_task_count.fetch_sub(1, mem::seq_cst);
         handle_queue_sync();
         // Since the queue was handled, the task count is now 0
-        task_idx =
-            sharded_map_.task_count_[target_thread_id].fetch_add(1,
-                                                                 mem::acq_rel);
-        // std::cout << "e" << task_idx << std::endl;
-        // assert(prev_task_idx == 0 || prev_task_idx > task_idx);
+        // task_idx = target_task_count.fetch_add(1, mem::seq_cst);
+        insert(std::move(pair));
+      } else {
+        // assert(task_idx < q->size());
+        // Insert the value into the queue
+
+        size_t num_tasks_raw = target_task_count.fetch_add(1);
+        sharded_map_.mtx_.unlock();
+
+        if (num_tasks_raw >= task_queue_.size()) {
+          std::cerr << "man: " << num_tasks_raw << std::endl;
+        }
+        assert(num_tasks_raw < task_queue_.size());
+        sharded_map_.task_queue_[target_thread_id][num_tasks_raw] =
+            std::move(pair);
       }
-      if (task_idx >= q.size()) {
-        std::cout << "i: " << task_idx << ", qsize: " << q.size() << std::endl;
-      }
-      assert(task_idx < q.size());
-      // Insert the value into the queue
-      q.at(task_idx) = std::move(pair);
     }
 
     /// @brief Inserts or updates a new value in the map.
@@ -265,8 +306,8 @@ public:
     ///
     /// @param key The key of the value to insert.
     /// @param value The value to associate with the key.
-    inline void insert(K& key, InputValue value, std::condition_variable& cv) {
-      insert(StoredValue(key, value), cv);
+    inline void insert(K& key, InputValue value) {
+      insert(StoredValue(key, value));
     }
   };
 
@@ -287,12 +328,29 @@ public:
     return size;
   }
 
+  Whereabouts where(const K& k) {
+    const size_t hash = Hasher{}(k);
+    const size_t target_thread_id = mix_select(hash);
+    SeqHashMap& map = map_[target_thread_id];
+    typename SeqHashMap::iterator it = map.find(k);
+    if (it != map.end()) {
+      return IN_MAP;
+    }
+    Queue& queue = task_queue_[target_thread_id];
+    for (size_t i = 0; i < task_count_[target_thread_id]; ++i) {
+      if (queue[i].first == k) {
+        return IN_QUEUE;
+      }
+    }
+    return NOWHERE;
+  }
+
   /// @brief Runs a method for each value in the map.
   ///
   /// The given function must take const references to a key and a value
   ///     respectively.
   /// @param f The function or lambda to run for each value.
-  void for_each(std::invocable<const K&, const V&> auto f) {
+  void for_each(std::invocable<const K&, const V&> auto f) const {
     for (const SeqHashMap& map : map_) {
       for (const auto& [k, v] : map) {
         f(k, v);
@@ -321,9 +379,20 @@ public:
     }
   }
 
+  void print_queue_upd() {
+    auto so = std::osyncstream(std::cout);
+
+    for (size_t i = 0; i < map_.size(); ++i) {
+      so << "Queue " << i << " load: " << task_count_[i].load(mem::acquire)
+         << "\n";
+    }
+    so << std::endl;
+  }
+
   void print_ins_upd() {
-    std::cout << "Inserts: " << num_inserts_.load() << std::endl;
-    std::cout << "Updates: " << num_updates_.load() << std::endl;
+    std::osyncstream(std::cout)
+        << "Inserts: " << num_inserts_.load()
+        << "\nUpdates: " << num_updates_.load() << std::endl;
   }
 
   std::barrier<decltype(FN)>& barrier() {
