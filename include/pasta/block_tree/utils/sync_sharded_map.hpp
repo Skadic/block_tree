@@ -182,7 +182,6 @@ public:
     /// @param k The key to insert or update a value for.
     /// @param in_value The value with which to insert or update.
     inline void insert_or_update_direct(const K& k, InputValue&& in_value) {
-      std::lock_guard lock(sharded_map_.mtx_);
       auto res = map_.find(k);
       assert(k.hash_ != 0);
       if (res == map_.end()) {
@@ -221,12 +220,12 @@ public:
     ///     done with their handle_queue call.
     void handle_queue() {
       const size_t num_tasks_raw = task_count_.exchange(0, mem::seq_cst);
-      // assert(num_tasks_raw <= task_queue_.size());
+      assert(num_tasks_raw <= task_queue_.size());
       const size_t num_tasks = std::min(num_tasks_raw, task_queue_.size());
       if (num_tasks == 0) {
         return;
       }
-      std::swap(task_queue_, task_queue_swap_);
+      // std::swap(task_queue_, task_queue_swap_);
 
       static unsigned char zeroed[sizeof(StoredValue)];
       memset(&zeroed, 0, sizeof(StoredValue));
@@ -234,7 +233,7 @@ public:
       for (size_t i = 0; i < num_tasks; ++i) {
         // bool is_eq = memcmp(zeroed, &task_queue_swap_[i],
         // sizeof(StoredValue)); assert(!"hello" || is_eq);
-        auto& entry = task_queue_swap_[i];
+        auto& entry = task_queue_[i];
         insert_or_update_direct(entry.first, std::move(entry.second));
         // memset(&task_queue_swap_[i], 0, sizeof(StoredValue));
       }
@@ -249,14 +248,14 @@ public:
     ///
     /// @param pair The key-value pair to insert or update.
     void insert(StoredValue&& pair) {
+      if (sharded_map_.threads_handling_queue_.load(mem::seq_cst) > 0) {
+        handle_queue_sync();
+      }
       const size_t hash = Hasher{}(pair.first);
       const size_t target_thread_id = sharded_map_.mix_select(hash);
       if (target_thread_id == thread_id_) {
         // If the target thread is this thread, insert the value directly
         insert_or_update_direct(pair.first, std::move(pair.second));
-        if (sharded_map_.threads_handling_queue_.load(mem::seq_cst) > 0) {
-          handle_queue_sync();
-        }
         return;
       }
 
@@ -266,35 +265,33 @@ public:
           sharded_map_.task_count_[target_thread_id];
       // size_t task_idx = target_task_count.fetch_add(1, mem::seq_cst);
 
-      sharded_map_.mtx_.lock();
-      size_t task_idx = target_task_count.load(mem::seq_cst);
+      // sharded_map_.mtx_.lock();
+      size_t task_idx = target_task_count.fetch_add(1, mem::seq_cst);
       // If the target queue is full, signal to the other threads, that they
       // need to handle their queue and handle this thread's queue
-      if (task_idx >= sharded_map_.task_queue_[target_thread_id].size() ||
-          sharded_map_.threads_handling_queue_.load(mem::seq_cst) > 0) {
-        sharded_map_.mtx_.unlock();
-        // Since we incremented that thread's task count, but didn't insert
-        // anything, we need to decrement it again so that it has the correct
-        // value
-        // target_task_count.fetch_sub(1, mem::seq_cst);
+      if (task_idx >= sharded_map_.task_queue_[target_thread_id].size()) {
+        // sharded_map_.mtx_.unlock();
+        //  Since we incremented that thread's task count, but didn't insert
+        //  anything, we need to decrement it again so that it has the correct
+        //  value
+        target_task_count.fetch_sub(1, mem::seq_cst);
         handle_queue_sync();
         // Since the queue was handled, the task count is now 0
         // task_idx = target_task_count.fetch_add(1, mem::seq_cst);
         insert(std::move(pair));
-      } else {
-        // assert(task_idx < q->size());
-        // Insert the value into the queue
-
-        size_t num_tasks_raw = target_task_count.fetch_add(1);
-        sharded_map_.mtx_.unlock();
-
-        if (num_tasks_raw >= task_queue_.size()) {
-          std::cerr << "man: " << num_tasks_raw << std::endl;
-        }
-        assert(num_tasks_raw < task_queue_.size());
-        sharded_map_.task_queue_[target_thread_id][num_tasks_raw] =
-            std::move(pair);
+        return;
       }
+      // assert(task_idx < q->size());
+
+      // size_t num_tasks_raw = target_task_count.fetch_add(1);
+      // sharded_map_.mtx_.unlock();
+
+      // if (num_tasks_raw >= task_queue_.size()) {
+      //   std::cerr << "man: " << num_tasks_raw << std::endl;
+      // }
+      assert(task_idx < task_queue_.size());
+      // Insert the value into the queue
+      sharded_map_.task_queue_[target_thread_id][task_idx] = std::move(pair);
     }
 
     /// @brief Inserts or updates a new value in the map.

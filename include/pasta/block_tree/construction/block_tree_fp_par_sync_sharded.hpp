@@ -38,7 +38,7 @@
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 
-#define BT_NUM_THREADS 12
+#define BT_NUM_THREADS 8
 #define BT_QUEUE_CAPACITY 163840
 #define BT_DBG_PRINT
 #undef BT_DBG_PRINT
