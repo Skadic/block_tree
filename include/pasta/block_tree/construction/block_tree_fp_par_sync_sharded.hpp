@@ -403,16 +403,29 @@ private:
     return 1 + ((x - 1) / y);
   }
 
-  template <typename T>
   void print_aggregate(const char* name,
-                       const tlx::Aggregate<T>& agg,
+                       const tlx::Aggregate<size_t>& agg,
                        size_t div = 1) {
-    printf("%s -> min: %10d, max: %10d, avg: %10d, dev: %10d\n",
+    printf("%s -> min: %10u, max: %10u, avg: %10.2f, dev: %10.2f, #: %10u\n",
            name,
            agg.min() / div,
            agg.max() / div,
-           agg.avg() / div,
-           agg.standard_deviation(0) / div);
+           agg.avg() / static_cast<double>(div),
+           agg.standard_deviation(0) / static_cast<double>(div),
+           agg.count());
+  }
+
+  void print_aggregate(const char* name,
+                       const tlx::Aggregate<double>& agg,
+                       size_t div = 1) {
+    auto divf = static_cast<double>(div);
+    printf("%s -> min: %10f, max: %10f, avg: %10.2f, dev: %10.2f, #: #10u\n",
+           name,
+           agg.min() / divf,
+           agg.max() / divf,
+           agg.avg() / divf,
+           agg.standard_deviation(0) / divf,
+           agg.count());
   }
 
   /// @brief Scan through the blocks pairwise in order to identify which blocks
@@ -441,7 +454,7 @@ private:
     std::atomic_size_t num_threads_done = 0;
     std::atomic_bool last_thread_done = false;
     auto& barrier = map.barrier();
-    tlx::Aggregate<double> scan_hits;
+    tlx::Aggregate<size_t> scan_hits;
     tlx::Aggregate<size_t> start_idle_ns;
     tlx::Aggregate<size_t> finish_idle_ns;
     tlx::Aggregate<size_t> total_idle_ns;
@@ -519,7 +532,7 @@ private:
                 .count();
         now = Clock::now();
       }
-      tlx::Aggregate<double> thread_scan_hits;
+      tlx::Aggregate<size_t> thread_scan_hits;
 
       if (start < static_cast<size_t>(num_block_pairs)) {
         RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
@@ -637,7 +650,7 @@ private:
                              BlockPairMap& map,
                              const size_t num_iterations,
                              const size_type current_block_index,
-                             tlx::Aggregate<double>& agg) {
+                             tlx::Aggregate<size_t>& agg) {
     for (size_t offset = 0; offset < num_iterations; ++offset, rk.next()) {
       RabinKarpHash current_hash = rk.current_hash();
       // Find the hash of the current window among the hashed block
@@ -686,7 +699,7 @@ private:
     std::atomic_size_t num_threads_done = 0;
     std::atomic_bool last_thread_done = false;
     auto& barrier = links.barrier();
-    tlx::Aggregate<double> scan_hits;
+    tlx::Aggregate<size_t> scan_hits;
     tlx::Aggregate<size_t> start_idle_ns;
     tlx::Aggregate<size_t> finish_idle_ns;
     tlx::Aggregate<size_t> total_idle_ns;
@@ -753,7 +766,7 @@ private:
         now = Clock::now();
       }
 
-      tlx::Aggregate<double> thread_scan_hits;
+      tlx::Aggregate<size_t> thread_scan_hits;
       // Hash every window and find the first occurrences for every
       // block.
       if (start < block_starts.size() - is_padded) {
@@ -792,8 +805,8 @@ private:
       map_loads.add(load);
     }
 
-    print_aggregate("Block Map Hits         ", scan_hits);
     print_aggregate("Block Map Loads        ", map_loads);
+    print_aggregate("Block Map Hits         ", scan_hits);
     print_aggregate("Block Idle (μs)        ", total_idle_ns, 1'000);
     print_aggregate("Block Handle Queue (μs)", finish_idle_ns, 1'000);
 
@@ -838,17 +851,17 @@ private:
                                     BlockMap& links,
                                     LevelData& level_data,
                                     const size_type current_block_index,
-                                    tlx::Aggregate<double>& hits) {
+                                    tlx::Aggregate<size_t>& hits) {
     for (size_type offset = 0; offset < level_data.block_size;
          ++offset, rk.next()) {
       const RabinKarpHash hash = rk.current_hash();
       // Find all blocks in the multimap that match our hash
       auto found = links.find(hash);
       if (found == links.end()) {
-        hits.add(0);
+        hits.add(0.0);
         continue;
       } else {
-        hits.add(100);
+        hits.add(100.0);
       }
       BlockOccurrences& occurrences = found->second;
       occurrences.update(current_block_index, offset);
