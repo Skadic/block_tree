@@ -37,6 +37,7 @@
 #include <robin_hood.h>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
+#include <tlx/math/aggregate.hpp>
 
 #define BT_NUM_THREADS 8
 #define BT_QUEUE_CAPACITY 163840
@@ -340,6 +341,8 @@ private:
     size_t blocks_ns = 0;
     size_t generate_ns = 0;
 
+    std::cout << "using " << BT_NUM_THREADS << " threads" << std::endl;
+
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
       std::cout << "----------------- level " << level << " -----------------"
@@ -400,6 +403,18 @@ private:
     return 1 + ((x - 1) / y);
   }
 
+  template <typename T>
+  void print_aggregate(const char* name,
+                       const tlx::Aggregate<T>& agg,
+                       size_t div = 1) {
+    printf("%s -> min: %10d, max: %10d, avg: %10d, dev: %10d\n",
+           name,
+           agg.min() / div,
+           agg.max() / div,
+           agg.avg() / div,
+           agg.standard_deviation(0) / div);
+  }
+
   /// @brief Scan through the blocks pairwise in order to identify which blocks
   /// should be replaced with back blocks.
   ///
@@ -424,10 +439,13 @@ private:
 
     TimePoint now = Clock::now();
     std::atomic_size_t num_threads_done = 0;
-    std::atomic_size_t insert_ops;
-    insert_ops.store(0);
     std::atomic_bool last_thread_done = false;
     auto& barrier = map.barrier();
+    tlx::Aggregate<double> scan_hits;
+    tlx::Aggregate<size_t> start_idle_ns;
+    tlx::Aggregate<size_t> finish_idle_ns;
+    tlx::Aggregate<size_t> total_idle_ns;
+    tlx::Aggregate<size_t> handle_queue_ns;
 
 #pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
     shared(level,                                                              \
@@ -437,8 +455,13 @@ private:
                is_padded,                                                      \
                num_threads_done,                                               \
                last_thread_done,                                               \
-               insert_ops,                                                     \
-               barrier)
+               barrier,                                                        \
+               start_idle_ns,                                                  \
+               finish_idle_ns,                                                 \
+               total_idle_ns,                                                  \
+               handle_queue_ns,                                                \
+               scan_hits,                                                      \
+               std::cout)
     {
       const size_t thread_id = omp_get_thread_num();
       typename BlockPairMap::Shard shard = map.get_shard(thread_id);
@@ -448,8 +471,8 @@ private:
       const size_t num_block_pairs = level.num_blocks - 1 - is_padded;
       const auto& block_starts = *level.block_starts;
 
-      // Hash every window and determine for all block pairs whether they have
-      // previous occurrences.
+      // Hash every window and determine for all block pairs whether
+      // they have previous occurrences.
       size_t segment_size =
           std::max<size_t>(1, ceil_div(num_block_pairs, num_threads));
 
@@ -459,18 +482,17 @@ private:
           std::min<size_t>(num_block_pairs, (thread_id + 1) * segment_size);
 
       for (size_t i = start; i < end; ++i) {
-        // If the next block is not adjacent, we cannot hash the pair starting
-        // at the current block
+        // If the next block is not adjacent, we cannot hash the pair
+        // starting at the current block
         if (!level.next_is_adjacent(i)) {
           continue;
         }
         // Move the hasher to the current block pair
         RabinKarp rk(text, SIGMA, block_starts[i], pair_size, PRIME);
         RabinKarpHash hash = rk.current_hash();
-        // Try to find the hash in the map, insert a new entry if it doesn't
-        // exist, and add the current block to the entry
+        // Try to find the hash in the map, insert a new entry if it
+        // doesn't exist, and add the current block to the entry
         shard.insert(hash, i);
-        insert_ops.fetch_add(1, std::memory_order_seq_cst);
       }
       const size_t thread_order =
           num_threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -489,7 +511,6 @@ private:
 
 #pragma omp barrier
       shard.handle_queue();
-#pragma omp barrier
 #pragma omp single
       {
         bp_hash_pairs_ns +=
@@ -498,6 +519,7 @@ private:
                 .count();
         now = Clock::now();
       }
+      tlx::Aggregate<double> thread_scan_hits;
 
       if (start < static_cast<size_t>(num_block_pairs)) {
         RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
@@ -505,28 +527,39 @@ private:
           if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
             continue;
           }
-          scan_windows_in_block_pair(rk, map, block_size, i);
+          scan_windows_in_block_pair(rk, map, block_size, i, thread_scan_hits);
         }
       }
+
+      auto& start_idle = shard.start_idle_ns();
+      auto& finish_idle = shard.finish_idle_ns();
+      auto& handle_queue = shard.handle_queue_ns();
+
+#pragma omp critical
+      {
+        start_idle_ns.add(start_idle.sum());
+        finish_idle_ns.add(finish_idle.sum());
+        total_idle_ns.add(start_idle.sum() + finish_idle.sum());
+        handle_queue_ns.add(handle_queue.sum());
+        scan_hits += thread_scan_hits;
+      };
     }
+
+    tlx::Aggregate<size_t> map_loads;
+
+    for (size_t load : map.map_loads()) {
+      map_loads.add(load);
+    }
+
+    print_aggregate("Pair Map Loads         ", map_loads);
+    print_aggregate("Pair Map Hits          ", scan_hits);
+    print_aggregate("Pair Idle (μs)         ", total_idle_ns, 1'000);
+    print_aggregate("Pair Handle Queue (μs) ", finish_idle_ns, 1'000);
 
     bp_scan_pairs_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
 
-#ifdef BT_DBG_PRINT
-    std::cout << "Pairs: " << std::endl;
-    map.print_map_loads();
-    map.print_queue_upd();
-    map.print_ins_upd();
-    std::cout << "Size: " << map.size() << std::endl;
-    std::cout << "Insert Cycles: " << insert_ops.load() << std::endl;
-    std::cout << "Actual Ops: "
-              << map.num_updates_.load() + map.num_inserts_.load() << std::endl;
-#endif
-    assert(map.num_updates_.load() + map.num_inserts_.load() ==
-           insert_ops.load());
-    assert(map.size() == (insert_ops.load() - map.num_updates_.load()));
     assert(map.num_inserts_.load() == map.size());
 
     level.is_internal = std::make_unique<BitVector>(level.num_blocks);
@@ -545,8 +578,9 @@ private:
     TimePoint now = Clock::now();
     // Set up the packed array holding the markings for each block.
     // Each mark is a 2-bit number.
-    // The MSB is 1 iff the block and its successor have a prior occurrence.
-    // The LSB is 1 iff the block and its predecessor have a prior occurrence.
+    // The MSB is 1 iff the block and its successor have a prior
+    // occurrence. The LSB is 1 iff the block and its predecessor
+    // have a prior occurrence.
     sdsl::int_vector<2> markings(num_blocks, 0);
     map.for_each(
         [&markings](const RabinKarpHash&, const PairOccurrences& pair_occs) {
@@ -602,14 +636,18 @@ private:
   scan_windows_in_block_pair(RabinKarp& rk,
                              BlockPairMap& map,
                              const size_t num_iterations,
-                             const size_type current_block_index) {
+                             const size_type current_block_index,
+                             tlx::Aggregate<double>& agg) {
     for (size_t offset = 0; offset < num_iterations; ++offset, rk.next()) {
       RabinKarpHash current_hash = rk.current_hash();
-      // Find the hash of the current window among the hashed block pairs.
+      // Find the hash of the current window among the hashed block
+      // pairs.
       auto found = map.find(current_hash);
       if (found == map.end()) {
-        // TODO count how often this actually happens
+        agg.add(0);
         continue;
+      } else {
+        agg.add(100);
       }
       PairOccurrences& occurrences = found->second;
       occurrences.update(current_block_index);
@@ -644,12 +682,16 @@ private:
 
     TimePoint now = Clock::now();
 
-    std::atomic_size_t insert_ops = 0;
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_threads_done = 0;
     std::atomic_bool last_thread_done = false;
     auto& barrier = links.barrier();
-    BitVector tester_pivka(num_blocks, false);
+    tlx::Aggregate<double> scan_hits;
+    tlx::Aggregate<size_t> start_idle_ns;
+    tlx::Aggregate<size_t> finish_idle_ns;
+    tlx::Aggregate<size_t> total_idle_ns;
+    tlx::Aggregate<size_t> handle_queue_ns;
+
 #pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
     shared(level_data,                                                         \
                text,                                                           \
@@ -658,10 +700,12 @@ private:
                is_padded,                                                      \
                num_threads_done,                                               \
                last_thread_done,                                               \
-               insert_ops,                                                     \
                barrier,                                                        \
-               tester_pivka,                                                   \
-               std::cout)
+               start_idle_ns,                                                  \
+               finish_idle_ns,                                                 \
+               total_idle_ns,                                                  \
+               handle_queue_ns,                                                \
+               scan_hits)
     {
       const size_t num_threads = omp_get_num_threads();
       const size_t thread_id = omp_get_thread_num();
@@ -678,19 +722,11 @@ private:
       const size_t end = std::min<size_t>(num_total_iterations,
                                           (thread_id + 1) * segment_size);
 
-#ifdef BT_DBG_PRINT
-      std::osyncstream(std::cout)
-          << "Thread " << thread_id << " -> start: " << start
-          << ", end: " << end << std::endl;
-#endif
-
       // Hash each block and store their hashes in the map
       for (size_t i = start; i < end; ++i) {
         const RabinKarp rk(text, SIGMA, block_starts[i], block_size, PRIME);
         RabinKarpHash hash = rk.current_hash();
         shard.insert(hash, {i, 0});
-        insert_ops.fetch_add(1, std::memory_order_acq_rel);
-        tester_pivka[i] = true;
       }
       const size_t thread_order =
           num_threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -717,7 +753,9 @@ private:
         now = Clock::now();
       }
 
-      // Hash every window and find the first occurrences for every block.
+      tlx::Aggregate<double> thread_scan_hits;
+      // Hash every window and find the first occurrences for every
+      // block.
       if (start < block_starts.size() - is_padded) {
         RabinKarp rk(text, SIGMA, block_starts[start], block_size, PRIME);
         for (size_t i = start; i < end; ++i) {
@@ -727,42 +765,43 @@ private:
           if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
             rk.restart(block_starts[i]);
           }
-          scan_windows_in_block(rk, links, level_data, i);
+          scan_windows_in_block(rk, links, level_data, i, thread_scan_hits);
         }
       }
+      auto& start_idle = shard.start_idle_ns();
+      auto& finish_idle = shard.finish_idle_ns();
+      auto& handle_queue = shard.handle_queue_ns();
+
+#pragma omp critical
+      {
+        start_idle_ns.add(start_idle.sum());
+        finish_idle_ns.add(finish_idle.sum());
+        total_idle_ns.add(start_idle.sum() + finish_idle.sum());
+        handle_queue_ns.add(handle_queue.sum());
+        scan_hits += thread_scan_hits;
+      };
     }
     b_scan_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
 
-#ifdef BT_DBG_PRINT
-    std::cout << "Blocks: " << std::endl;
-    links.print_map_loads();
-    links.print_queue_upd();
-    links.print_ins_upd();
-    std::cout << "Size: " << links.size() << std::endl;
-    std::cout << "Insert Cycles: " << insert_ops.load() << std::endl;
-    std::cout << "Actual Ops: "
-              << links.num_updates_.load() + links.num_inserts_.load()
-              << std::endl;
-    print_full_size(links);
-#endif
-    assert(links.num_updates_.load() + links.num_inserts_.load() ==
-           insert_ops.load());
+    tlx::Aggregate<size_t> map_loads;
+
+    for (size_t load : links.map_loads()) {
+      map_loads.add(load);
+    }
+
+    print_aggregate("Block Map Hits         ", scan_hits);
+    print_aggregate("Block Map Loads        ", map_loads);
+    print_aggregate("Block Idle (μs)        ", total_idle_ns, 1'000);
+    print_aggregate("Block Handle Queue (μs)", finish_idle_ns, 1'000);
+
     assert(links.num_inserts_.load() == links.size());
 
-#ifdef BT_DBG_PRINT
-    for (size_t i = 0; i < tester_pivka.size(); ++i) {
-      if (!tester_pivka[i]) {
-        std::cout << "Block " << i << " was not inserted" << std::endl;
-      }
-    }
-#endif
-
-    // By this point, the map should contain the first occurrences of every
-    // respective block's content. We then fill the pointers and offsets with
-    // this data and increment counters accordingly
+    // By this point, the map should contain the first occurrences of
+    // every respective block's content. We then fill the pointers
+    // and offsets with this data and increment counters accordingly
     links.for_each(
         [&level_data](const RabinKarpHash&, const BlockOccurrences& occs) {
           auto first_occ = occs.first_occ.load();
@@ -772,10 +811,6 @@ private:
               continue;
             }
 
-#ifdef BT_DBG_PRINT
-            std::cout << occ << " -> " << first_occ.block << "@"
-                      << first_occ.offset << std::endl;
-#endif
             (*level_data.pointers)[occ] = first_occ.block;
             (*level_data.offsets)[occ] = first_occ.offset;
             const bool is_back_block = !(*level_data.is_internal)[occ];
@@ -784,56 +819,6 @@ private:
                 is_back_block && (first_occ.offset > 0);
           }
         });
-
-#ifdef BT_DBG_PRINT
-    for (size_t i = 0; i < num_blocks - is_padded; ++i) {
-      const RabinKarp rk(text,
-                         SIGMA,
-                         (*level_data.block_starts)[i],
-                         std::min<size_t>(level_data.block_size, text.size()),
-                         PRIME);
-      RabinKarpHash hash = rk.current_hash();
-      if ((*level_data.is_internal)[i]) {
-        continue;
-      }
-      if ((*level_data.pointers)[i] < 0) {
-        std::cout << "level " << level_data.level_index << ", block " << i
-                  << " / " << level_data.num_blocks << ", starting at "
-                  << (*level_data.block_starts)[i] << " with length "
-                  << level_data.block_size << " missing pointer, " << std::endl;
-        if (tester_pivka[i]) {
-          std::cout << "and was apparently inserted" << std::endl;
-        } else {
-          std::cout << "WASN'T inserted" << std::endl;
-        }
-        std::cout << "is: ";
-        switch (links.where(hash)) {
-          case pasta::Whereabouts::NOWHERE:
-            std::cout << "nowhere";
-            break;
-          case pasta::Whereabouts::IN_QUEUE:
-            std::cout << "in queue";
-            break;
-          case pasta::Whereabouts::IN_MAP:
-            std::cout << "in map";
-            break;
-        }
-        std::cout << std::endl;
-        auto found = links.find(hash);
-        if (found == links.end()) {
-          std::cout << "and it doesn't have an entry in the map" << std::endl;
-        } else {
-          BlockOccurrences& bo = found->second;
-          typename BlockOccurrences::FirstOccurrence fo = bo.first_occ.load();
-          std::cout << "ENTRY EXISTS:\n\tBlock: " << fo.block
-                    << "\n\tOffset: " << fo.offset << "\n\tPosition:"
-                    << ((*level_data.block_starts)[fo.block] + fo.offset)
-                    << std::endl;
-        }
-      }
-      assert((*level_data.pointers)[i] >= 0);
-    }
-#endif
 
     b_update_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
@@ -852,14 +837,18 @@ private:
   static void scan_windows_in_block(RabinKarp& rk,
                                     BlockMap& links,
                                     LevelData& level_data,
-                                    const size_type current_block_index) {
+                                    const size_type current_block_index,
+                                    tlx::Aggregate<double>& hits) {
     for (size_type offset = 0; offset < level_data.block_size;
          ++offset, rk.next()) {
       const RabinKarpHash hash = rk.current_hash();
       // Find all blocks in the multimap that match our hash
       auto found = links.find(hash);
       if (found == links.end()) {
+        hits.add(0);
         continue;
+      } else {
+        hits.add(100);
       }
       BlockOccurrences& occurrences = found->second;
       occurrences.update(current_block_index, offset);
@@ -1060,9 +1049,9 @@ private:
     // Number of pruned blocks before the current block
     size_type num_pruned = 0;
 
-    // We will reuse the allocated memory of the pointers vector to store
-    // the number of pruned blocks before the block.
-    // The invariant is that all values up to i are overwritten while all
+    // We will reuse the allocated memory of the pointers vector to
+    // store the number of pruned blocks before the block. The
+    // invariant is that all values up to i are overwritten while all
     // values starting after i will still be valid pointers
     // This contains the number of pruned blocks before the block i
     std::vector<size_type>& prefix_pruned_blocks = *level.pointers;
@@ -1120,11 +1109,12 @@ private:
   /// @return Whether this block is/stays internal after the pruning process
   bool prune_block(std::vector<LevelData>& levels,
                    const size_t level_index,
-                   const size_t block_index) {
+                   const size_t block_index) const {
     LevelData& level = levels[level_index];
     BitVector& is_internal = *level.is_internal;
 
-    // If the current block is a back block already, there is nothing to prune
+    // If the current block is a back block already, there is nothing
+    // to prune
     if (!is_internal[block_index]) {
       return false;
     }
@@ -1135,8 +1125,8 @@ private:
     bool has_internal_children = false;
 
     // On the last level, all blocks just have leaves as children,
-    // none of which can be pointed to. So only recurse, if we are not on the
-    // last level.
+    // none of which can be pointed to. So only recurse, if we are
+    // not on the last level.
     if (level_index < levels.size() - 1) {
       const size_type last_child =
           std::min<size_type>(first_child + this->tau_ - 1,
@@ -1147,7 +1137,8 @@ private:
       }
     }
 
-    // If any of the children is internal, this block stays internal as well
+    // If any of the children is internal, this block stays internal
+    // as well
     if (has_internal_children) {
       return true;
     }
@@ -1155,8 +1146,8 @@ private:
     const size_type pointer = (*level.pointers)[block_index];
     const size_type offset = (*level.offsets)[block_index];
     const size_type counter = (*level.counters)[block_index];
-    // If there is no earlier occurrence or there are blocks pointing to this,
-    // then this must stay internal
+    // If there is no earlier occurrence or there are blocks pointing
+    // to this, then this must stay internal
     if (pointer == NO_EARLIER_OCC || counter > 0) {
       return true;
     }
@@ -1232,53 +1223,7 @@ public:
       delete offsets;
     }
   }
-
-  /// @brief Validates that a back-pointer actually points to the same text
-  /// content.
-  /// @param text The input text.
-  /// @param level_index The index of the current level.
-  /// @param block_index The block index.
-  /// @param block_start The start index of the block's content in the text.
-  /// @param source_start The start index of the source block's content in the
-  /// text.
-  /// @param source_pointer The block index of the source block.
-  /// @param source_offset The offset from which the block copies out of the
-  /// source block.
-  /// @param block_size The block size.
-  /// @return `true`, iff the pointer is valid. false otherwise
-  bool debug_validate_pointer(const std::vector<input_type>& text,
-                              const size_type level_index,
-                              const size_type block_index,
-                              const size_type block_start,
-                              const size_type source_start,
-                              const size_type source_pointer,
-                              const size_type source_offset,
-                              const size_type block_size) const {
-    if (source_start + block_size > block_start) {
-      std::cerr << "source overlapping block on level " << level_index
-                << ":\n\tBlock Start: " << block_start
-                << "\n\tSource Start: " << source_start
-                << "\n\tBlock Size: " << block_size
-                << "\n\tBlock: " << block_index
-                << "\n\tSource Block: " << source_pointer
-                << "\n\tSource Offset: " << source_offset << std::endl;
-      return false;
-    }
-    for (size_type i = 0; i < block_size; i++) {
-      if (text[block_start + i] != text[source_start + i]) {
-        std::cerr << "source block mismatch on level " << level_index << ": "
-                  << "\n\tBlock Start: " << block_start
-                  << "\n\tSource Start: " << source_start
-                  << "\n\tBlock Size: " << block_size
-                  << "\n\tBlock: " << block_index
-                  << "\n\tSource Block: " << source_pointer
-                  << "\n\tSource Offset: " << source_offset << std::endl;
-        return false;
-      }
-    }
-    return true;
-  }
-}; // namespace pasta
+};
 
 } // namespace pasta
 

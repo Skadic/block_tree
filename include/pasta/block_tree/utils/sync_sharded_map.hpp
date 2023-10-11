@@ -89,7 +89,6 @@ class SyncShardedMap {
   /// @brief Contains a task queue for each thread, holding insert
   ///   operations for each thread.
   std::vector<Queue> task_queue_;
-  std::vector<Queue> task_queue_swap_;
   /// @brief Contains the number of tasks in each thread's queue.
   std::span<std::atomic_size_t> task_count_;
   /// @brief Contains the number of threads currently handling their queues.
@@ -138,15 +137,12 @@ public:
         mtx_() {
     map_.reserve(thread_count);
     task_queue_.reserve(thread_count);
-    task_queue_swap_.reserve(thread_count);
     task_count_ =
         std::span<std::atomic_size_t>(new std::atomic_size_t[thread_count],
                                       thread_count);
     for (size_t i = 0; i < thread_count; i++) {
       map_.emplace_back();
       task_queue_.emplace_back(new StoredValue[queue_capacity], queue_capacity);
-      task_queue_swap_.emplace_back(new StoredValue[queue_capacity],
-                                    queue_capacity);
       task_count_[i] = 0;
     }
   }
@@ -156,9 +152,6 @@ public:
     for (auto& queue : task_queue_) {
       delete[] queue.data();
     }
-    for (auto& queue : task_queue_swap_) {
-      delete[] queue.data();
-    }
   }
 
   class Shard {
@@ -166,8 +159,10 @@ public:
     const size_t thread_id_;
     SeqHashMap& map_;
     Queue& task_queue_;
-    Queue& task_queue_swap_;
     std::atomic_size_t& task_count_;
+    tlx::Aggregate<size_t> start_idle_ns_;
+    tlx::Aggregate<size_t> handle_queue_ns_;
+    tlx::Aggregate<size_t> finish_idle_ns_;
 
   public:
     Shard(SyncShardedMap& sharded_map, size_t thread_id)
@@ -175,8 +170,10 @@ public:
           thread_id_(thread_id),
           map_(sharded_map_.map_[thread_id]),
           task_queue_(sharded_map_.task_queue_[thread_id]),
-          task_queue_swap_(sharded_map_.task_queue_swap_[thread_id]),
-          task_count_(sharded_map.task_count_[thread_id]) {}
+          task_count_(sharded_map.task_count_[thread_id]),
+          start_idle_ns_(),
+          handle_queue_ns_(),
+          finish_idle_ns_() {}
 
     /// @brief Inserts or updates a new value in the map, depending on whether
     /// @param k The key to insert or update a value for.
@@ -203,15 +200,30 @@ public:
       if (make_others_wait) {
         // If this value is >0 then other threads will also handle their queue
         // when trying to insert
-        sharded_map_.threads_handling_queue_.fetch_add(1, mem::seq_cst);
+        sharded_map_.threads_handling_queue_.fetch_add(1, mem::acq_rel);
       }
+      auto now = std::chrono::high_resolution_clock::now();
       sharded_map_.barrier_.arrive_and_wait();
+      size_t ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                            std::chrono::high_resolution_clock::now() - now)
+                            .count();
+      start_idle_ns_.add(ns_count);
 
+      now = std::chrono::high_resolution_clock::now();
       handle_queue();
+      ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::high_resolution_clock::now() - now)
+                     .count();
+      handle_queue_ns_.add(ns_count);
 
+      now = std::chrono::high_resolution_clock::now();
       sharded_map_.barrier_.arrive_and_wait();
+      ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                     std::chrono::high_resolution_clock::now() - now)
+                     .count();
+      finish_idle_ns_.add(ns_count);
       if (make_others_wait) {
-        sharded_map_.threads_handling_queue_.fetch_sub(1, mem::seq_cst);
+        sharded_map_.threads_handling_queue_.fetch_sub(1, mem::acq_rel);
       }
     }
 
@@ -219,23 +231,19 @@ public:
     ///     its queue, waiting for other threads to be
     ///     done with their handle_queue call.
     void handle_queue() {
-      const size_t num_tasks_raw = task_count_.exchange(0, mem::seq_cst);
+      const size_t num_tasks_raw = task_count_.exchange(0, mem::acq_rel);
       assert(num_tasks_raw <= task_queue_.size());
       const size_t num_tasks = std::min(num_tasks_raw, task_queue_.size());
       if (num_tasks == 0) {
         return;
       }
-      // std::swap(task_queue_, task_queue_swap_);
 
       static unsigned char zeroed[sizeof(StoredValue)];
       memset(&zeroed, 0, sizeof(StoredValue));
       //  Handle all tasks in the queue
       for (size_t i = 0; i < num_tasks; ++i) {
-        // bool is_eq = memcmp(zeroed, &task_queue_swap_[i],
-        // sizeof(StoredValue)); assert(!"hello" || is_eq);
         auto& entry = task_queue_[i];
         insert_or_update_direct(entry.first, std::move(entry.second));
-        // memset(&task_queue_swap_[i], 0, sizeof(StoredValue));
       }
     }
 
@@ -248,7 +256,7 @@ public:
     ///
     /// @param pair The key-value pair to insert or update.
     void insert(StoredValue&& pair) {
-      if (sharded_map_.threads_handling_queue_.load(mem::seq_cst) > 0) {
+      if (sharded_map_.threads_handling_queue_.load(mem::acquire) > 0) {
         handle_queue_sync();
       }
       const size_t hash = Hasher{}(pair.first);
@@ -260,35 +268,23 @@ public:
       }
 
       // Otherwise enqueue the new value in the target thread
-      Queue* q = &sharded_map_.task_queue_[target_thread_id];
       std::atomic_size_t& target_task_count =
           sharded_map_.task_count_[target_thread_id];
-      // size_t task_idx = target_task_count.fetch_add(1, mem::seq_cst);
 
-      // sharded_map_.mtx_.lock();
-      size_t task_idx = target_task_count.fetch_add(1, mem::seq_cst);
+      size_t task_idx = target_task_count.fetch_add(1, mem::acq_rel);
       // If the target queue is full, signal to the other threads, that they
       // need to handle their queue and handle this thread's queue
       if (task_idx >= sharded_map_.task_queue_[target_thread_id].size()) {
-        // sharded_map_.mtx_.unlock();
         //  Since we incremented that thread's task count, but didn't insert
         //  anything, we need to decrement it again so that it has the correct
         //  value
-        target_task_count.fetch_sub(1, mem::seq_cst);
+        target_task_count.fetch_sub(1, mem::acq_rel);
         handle_queue_sync();
         // Since the queue was handled, the task count is now 0
         // task_idx = target_task_count.fetch_add(1, mem::seq_cst);
         insert(std::move(pair));
         return;
       }
-      // assert(task_idx < q->size());
-
-      // size_t num_tasks_raw = target_task_count.fetch_add(1);
-      // sharded_map_.mtx_.unlock();
-
-      // if (num_tasks_raw >= task_queue_.size()) {
-      //   std::cerr << "man: " << num_tasks_raw << std::endl;
-      // }
       assert(task_idx < task_queue_.size());
       // Insert the value into the queue
       sharded_map_.task_queue_[target_thread_id][task_idx] = std::move(pair);
@@ -305,6 +301,18 @@ public:
     /// @param value The value to associate with the key.
     inline void insert(K& key, InputValue value) {
       insert(StoredValue(key, value));
+    }
+
+    [[nodiscard]] const tlx::Aggregate<size_t>& start_idle_ns() const {
+      return start_idle_ns_;
+    }
+
+    [[nodiscard]] const tlx::Aggregate<size_t>& handle_queue_ns() const {
+      return handle_queue_ns_;
+    }
+
+    [[nodiscard]] const tlx::Aggregate<size_t>& finish_idle_ns() const {
+      return finish_idle_ns_;
     }
   };
 
@@ -376,7 +384,7 @@ public:
     }
   }
 
-  void print_queue_upd() {
+  void print_queue_loads() {
     auto so = std::osyncstream(std::cout);
 
     for (size_t i = 0; i < map_.size(); ++i) {
@@ -384,6 +392,15 @@ public:
          << "\n";
     }
     so << std::endl;
+  }
+
+  [[nodiscard]] std::vector<size_t> map_loads() const {
+    std::vector<size_t> loads;
+    loads.reserve(thread_count_);
+    for (size_t i = 0; i < thread_count_; ++i) {
+      loads.push_back(map_[i].size());
+    }
+    return loads;
   }
 
   void print_ins_upd() {
