@@ -29,6 +29,8 @@
 
 namespace pasta {
 
+__extension__ typedef unsigned __int128 uint128_t;
+
 template <typename T>
 class MersenneHash {
 public:
@@ -55,18 +57,75 @@ public:
 
   bool operator==(const MersenneHash& other) const {
     //            std::cout << start_ << " " << other.start_ << std::endl;
-    if (length_ != other.length_)
+    // if (length_ != other.length_)
+    // return false;
+    if (hash_ != other.hash_)
       return false;
 
     const std::vector<T>& text = *text_;
     const std::vector<T>& other_text = *other.text_;
 
+#define MH_MEMCMP
+#ifdef MH_LOOP
     for (uint64_t i = 0; i < length_; i++) {
       if (text[start_ + i] != other_text[other.start_ + i]) {
         return false;
       }
     }
-    return hash_ == other.hash_;
+    return true;
+#elifdef MH_PACKED_LOOP
+    const size_t num_blocks = length_ / 8;
+    for (int block = 0; block < num_blocks; ++block) {
+      uint64_t a =
+          *reinterpret_cast<const uint64_t*>(text.data() + start_ + block * 8);
+      uint64_t b = *reinterpret_cast<const uint64_t*>(other_text.data() +
+                                                      other.start_ + block * 8);
+      if (a != b) {
+        return false;
+      }
+    }
+    return memcmp(text_->data() + start_ + num_blocks * 8,
+                  other.text_->data() + other.start_ + num_blocks * 8,
+                  length_ - num_blocks * 8) == 0;
+    return true;
+#elifdef MH_SSE
+    // Requires SSE2
+    const size_t num_blocks = length_ / 16;
+    for (int block = 0; block < num_blocks; ++block) {
+      __m128i_u a = _mm_loadu_si128(reinterpret_cast<const __m128i_u*>(
+          text.data() + start_ + block * 16));
+      __m128i_u b = _mm_loadu_si128(reinterpret_cast<const __m128i_u*>(
+          other_text.data() + other.start_ + block * 16));
+      __m128i_u res = _mm_cmpeq_epi8(a, b);
+      if (0xFFFF != _mm_movemask_epi8(res)) {
+        return false;
+      }
+    }
+    return memcmp(text_->data() + start_ + num_blocks * 16,
+                  other.text_->data() + other.start_ + num_blocks * 16,
+                  length_ - num_blocks * 16) == 0;
+#elifdef MH_AVX
+    // Requires AVX-2
+    const size_t num_blocks = length_ / 32;
+    for (int block = 0; block < num_blocks; ++block) {
+      __m256i a = _mm256_loadu_si256(
+          reinterpret_cast<const __m256i*>(text.data() + start_ + block * 32));
+      __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+          other_text.data() + other.start_ + block * 32));
+      __m256i res = _mm256_cmpeq_epi8(a, b);
+      if (0xFFFFFFFF != _mm256_movemask_epi8(res)) {
+        return false;
+      }
+    }
+    return memcmp(text_->data() + start_ + num_blocks * 32,
+                  other.text_->data() + other.start_ + num_blocks * 32,
+                  length_ - num_blocks * 32) == 0;
+
+#elifdef MH_MEMCMP
+    return memcmp(text.data() + start_,
+                  other_text.data() + other.start_,
+                  length_) == 0;
+#endif
   }
 };
 

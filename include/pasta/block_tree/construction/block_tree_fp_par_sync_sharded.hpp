@@ -566,8 +566,8 @@ private:
 
     print_aggregate("Pair Map Loads         ", map_loads);
     print_aggregate("Pair Map Hits          ", scan_hits);
-    print_aggregate("Pair Idle (μs)         ", total_idle_ns, 1'000);
-    print_aggregate("Pair Handle Queue (μs) ", finish_idle_ns, 1'000);
+    print_aggregate("Pair Idle (ms)         ", total_idle_ns, 1'000'000);
+    print_aggregate("Pair Handle Queue (ms) ", finish_idle_ns, 1'000'000);
 
     bp_scan_pairs_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
@@ -756,7 +756,6 @@ private:
       barrier.arrive_and_drop();
 #pragma omp barrier
       shard.handle_queue();
-#pragma omp barrier
 #pragma omp single
       {
         b_hash_blocks_ns +=
@@ -807,8 +806,8 @@ private:
 
     print_aggregate("Block Map Loads        ", map_loads);
     print_aggregate("Block Map Hits         ", scan_hits);
-    print_aggregate("Block Idle (μs)        ", total_idle_ns, 1'000);
-    print_aggregate("Block Handle Queue (μs)", finish_idle_ns, 1'000);
+    print_aggregate("Block Idle (ms)        ", total_idle_ns, 1'000'000);
+    print_aggregate("Block Handle Queue (ms)", finish_idle_ns, 1'000'000);
 
     assert(links.num_inserts_.load() == links.size());
 
