@@ -1,13 +1,12 @@
 #pragma once
 
 #include <barrier>
-#include <cassert>
 #include <concepts>
 #include <condition_variable>
 #include <cstddef>
 #include <omp.h>
 #include <pasta/block_tree/utils/concepts.hpp>
-#include <pasta/block_tree/utils/mpsc_queue/jiffy.hpp>
+#include <pasta/block_tree/utils/debug.hpp>
 #include <span>
 #include <syncstream>
 #include <unordered_map>
@@ -102,8 +101,6 @@ class SyncShardedMap {
 
   std::barrier<decltype(FN)> barrier_;
 
-  std::mutex mtx_;
-
   /// https://zimbry.blogspot.com/2011/09/better-bit-mixing-improving-on.html
   inline uint64_t mix_select(uint64_t key) {
     key ^= (key >> 31);
@@ -133,8 +130,7 @@ public:
         threads_handling_queue_(0),
         barrier_(thread_count, FN),
         num_updates_(0),
-        num_inserts_(0),
-        mtx_() {
+        num_inserts_(0) {
     map_.reserve(thread_count);
     task_queue_.reserve(thread_count);
     task_count_ =
@@ -160,9 +156,11 @@ public:
     SeqHashMap& map_;
     Queue& task_queue_;
     std::atomic_size_t& task_count_;
+#ifdef BT_DBG
     tlx::Aggregate<size_t> start_idle_ns_;
     tlx::Aggregate<size_t> handle_queue_ns_;
     tlx::Aggregate<size_t> finish_idle_ns_;
+#endif
 
   public:
     Shard(SyncShardedMap& sharded_map, size_t thread_id)
@@ -170,29 +168,36 @@ public:
           thread_id_(thread_id),
           map_(sharded_map_.map_[thread_id]),
           task_queue_(sharded_map_.task_queue_[thread_id]),
-          task_count_(sharded_map.task_count_[thread_id]),
+          task_count_(sharded_map.task_count_[thread_id])
+#ifdef BT_DBG
+          ,
           start_idle_ns_(),
           handle_queue_ns_(),
-          finish_idle_ns_() {}
+          finish_idle_ns_()
+#endif
+    {
+    }
 
     /// @brief Inserts or updates a new value in the map, depending on whether
     /// @param k The key to insert or update a value for.
     /// @param in_value The value with which to insert or update.
     inline void insert_or_update_direct(const K& k, InputValue&& in_value) {
       auto res = map_.find(k);
-      assert(k.hash_ != 0);
       if (res == map_.end()) {
         // If the value does not exist, insert it
         K key = k;
         V initial = UpdateFn::init(key, std::move(in_value));
-        auto [a, b] = map_.emplace(key, std::move(initial));
-        assert(b);
+        map_.emplace(key, std::move(initial));
+#ifdef BT_DBG
         sharded_map_.num_inserts_.fetch_add(1, mem::acq_rel);
+#endif
       } else {
         // Otherwise, update it.
         V& val = res->second;
         UpdateFn::update(k, val, std::move(in_value));
+#ifdef BT_DBG
         sharded_map_.num_updates_.fetch_add(1, mem::acq_rel);
+#endif
       }
     }
 
@@ -202,26 +207,34 @@ public:
         // when trying to insert
         sharded_map_.threads_handling_queue_.fetch_add(1, mem::acq_rel);
       }
+#ifdef BT_DBG
       auto now = std::chrono::high_resolution_clock::now();
+#endif
       sharded_map_.barrier_.arrive_and_wait();
+#ifdef BT_DBG
       size_t ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
                             std::chrono::high_resolution_clock::now() - now)
                             .count();
       start_idle_ns_.add(ns_count);
 
       now = std::chrono::high_resolution_clock::now();
+#endif
       handle_queue();
+#ifdef BT_DBG
       ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
                      std::chrono::high_resolution_clock::now() - now)
                      .count();
       handle_queue_ns_.add(ns_count);
 
       now = std::chrono::high_resolution_clock::now();
+#endif
       sharded_map_.barrier_.arrive_and_wait();
+#ifdef BT_DBG
       ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
                      std::chrono::high_resolution_clock::now() - now)
                      .count();
       finish_idle_ns_.add(ns_count);
+#endif
       if (make_others_wait) {
         sharded_map_.threads_handling_queue_.fetch_sub(1, mem::acq_rel);
       }
@@ -232,7 +245,7 @@ public:
     ///     done with their handle_queue call.
     void handle_queue() {
       const size_t num_tasks_raw = task_count_.exchange(0, mem::acq_rel);
-      assert(num_tasks_raw <= task_queue_.size());
+      BT_ASSERT(num_tasks_raw <= task_queue_.size());
       const size_t num_tasks = std::min(num_tasks_raw, task_queue_.size());
       if (num_tasks == 0) {
         return;
@@ -285,7 +298,7 @@ public:
         insert(std::move(pair));
         return;
       }
-      assert(task_idx < task_queue_.size());
+      BT_ASSERT(task_idx < task_queue_.size());
       // Insert the value into the queue
       sharded_map_.task_queue_[target_thread_id][task_idx] = std::move(pair);
     }
@@ -303,6 +316,7 @@ public:
       insert(StoredValue(key, value));
     }
 
+#ifdef BT_DBG
     [[nodiscard]] const tlx::Aggregate<size_t>& start_idle_ns() const {
       return start_idle_ns_;
     }
@@ -314,6 +328,7 @@ public:
     [[nodiscard]] const tlx::Aggregate<size_t>& finish_idle_ns() const {
       return finish_idle_ns_;
     }
+#endif
   };
 
   Shard get_shard(const size_t thread_id) {

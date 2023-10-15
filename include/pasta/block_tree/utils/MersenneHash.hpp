@@ -2,6 +2,7 @@
  * This file is part of pasta::block_tree
  *
  * Copyright (C) 2022 Daniel Meyer
+ * Copyright (C) 2023 Etienne Palanga
  *
  * pasta::block_tree is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -28,8 +29,6 @@
 #include <vector>
 
 namespace pasta {
-
-__extension__ typedef unsigned __int128 uint128_t;
 
 template <typename T>
 class MersenneHash {
@@ -73,7 +72,7 @@ public:
       }
     }
     return true;
-#elifdef MH_PACKED_LOOP
+#elif defined MH_PACKED_LOOP
     const size_t num_blocks = length_ / 8;
     for (int block = 0; block < num_blocks; ++block) {
       uint64_t a =
@@ -88,7 +87,7 @@ public:
                   other.text_->data() + other.start_ + num_blocks * 8,
                   length_ - num_blocks * 8) == 0;
     return true;
-#elifdef MH_SSE
+#elif defined MH_SSE
     // Requires SSE2
     const size_t num_blocks = length_ / 16;
     for (int block = 0; block < num_blocks; ++block) {
@@ -104,7 +103,7 @@ public:
     return memcmp(text_->data() + start_ + num_blocks * 16,
                   other.text_->data() + other.start_ + num_blocks * 16,
                   length_ - num_blocks * 16) == 0;
-#elifdef MH_AVX
+#elif defined MH_AVX
     // Requires AVX-2
     const size_t num_blocks = length_ / 32;
     for (int block = 0; block < num_blocks; ++block) {
@@ -121,7 +120,7 @@ public:
                   other.text_->data() + other.start_ + num_blocks * 32,
                   length_ - num_blocks * 32) == 0;
 
-#elifdef MH_MEMCMP
+#elif defined MH_MEMCMP
     return memcmp(text.data() + start_,
                   other_text.data() + other.start_,
                   length_) == 0;

@@ -24,16 +24,13 @@
 #include "pasta/block_tree/block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
-#include "pasta/block_tree/utils/mpsc_queue/stupid_queue.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
 #include <atomic>
 #include <concepts>
 #include <list>
 #include <memory>
-#include <mutex>
 #include <omp.h>
-#include <phmap.h>
 #include <robin_hood.h>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
@@ -41,8 +38,6 @@
 
 #define BT_NUM_THREADS 8
 #define BT_QUEUE_CAPACITY 163840
-#define BT_DBG_PRINT
-#undef BT_DBG_PRINT
 
 __extension__ typedef unsigned __int128 uint128_t;
 
@@ -80,7 +75,6 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
   template <typename key_type, typename value_type>
   using SeqHashMap =
       robin_hood::unordered_map<key_type, value_type, std::hash<key_type>>;
-  // std::unordered_map<key_type, value_type, std::hash<key_type>>;
 
   /// @brief A rabin karp hasher preconfigured for the current template
   ///   parameters
@@ -94,6 +88,7 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
   using RabinKarpMap =
       SyncShardedMap<RabinKarpHash, value_type, SeqHashMap, update_fn_type>;
 
+#ifdef BT_DBG
 public:
   size_t bp_hash_pairs_ns = 0;
   size_t bp_scan_pairs_ns = 0;
@@ -103,6 +98,7 @@ public:
   size_t b_hash_blocks_ns = 0;
   size_t b_scan_blocks_ns = 0;
   size_t b_update_blocks_ns = 0;
+#endif
 
 private:
   /// @brief Contains data about a block tree level under construction
@@ -285,9 +281,7 @@ private:
     inline static void update(const RabinKarpHash&,
                               BlockOccurrences& occurrences,
                               InputValue&& input_value) {
-      size_t prev = occurrences.occurrences.size();
       occurrences.add_block(input_value.first);
-      assert(occurrences.occurrences.size() == prev + 1);
       occurrences.update(input_value.first, input_value.second);
     }
 
@@ -337,38 +331,49 @@ private:
     top_level.block_size = top_block_size;
     top_level.num_blocks = top_level.block_starts->size();
 
+#ifdef BT_DBG
     size_t pairs_ns = 0;
     size_t blocks_ns = 0;
     size_t generate_ns = 0;
 
     std::cout << "using " << BT_NUM_THREADS << " threads" << std::endl;
+#endif
 
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
+#ifdef BT_DBG
       std::cout << "----------------- level " << level << " -----------------"
                 << std::endl;
-      LevelData& current = levels.back();
 
       TimePoint now = Clock::now();
+#endif
+      LevelData& current = levels.back();
       scan_block_pairs(text, current, is_padded);
+#ifdef BT_DBG
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
       now = Clock::now();
+#endif
       scan_blocks(text, current, is_padded);
+#ifdef BT_DBG
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
                        .count();
       now = Clock::now();
+#endif
 
       // Generate the next level (if we're not at the last level)
       if (level < static_cast<size_t>(tree_height) - 1) {
         levels.push_back(std::move(generate_next_level(text, current)));
       }
+#ifdef BT_DBG
       generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                          Clock::now() - now)
                          .count();
+#endif
     }
+#ifdef BT_DBG
     TimePoint now = Clock::now();
 
     std::cout << "pairs: " << (pairs_ns / 1'000'000)
@@ -382,18 +387,23 @@ private:
               << "ms,\n\tupdate blocks: " << (b_update_blocks_ns / 1'000'000)
               << "ms,\ngenerate_next: " << (generate_ns / 1'000'000) << "ms,"
               << std::endl;
+#endif
     prune(levels);
+#ifdef BT_DBG
     size_t prune_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
 
     std::cout << "prune: " << (prune_ns / 1'000'000) << "ms," << std::endl;
+#endif
     make_tree(text, levels, padding);
+#ifdef BT_DBG
     size_t make_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     std::cout << "make: " << (make_ns / 1'000'000) << "ms" << std::endl;
+#endif
   }
 
   /// @brief Returns the ceiling of x / y for x > 0;
@@ -406,26 +416,14 @@ private:
   void print_aggregate(const char* name,
                        const tlx::Aggregate<size_t>& agg,
                        size_t div = 1) {
-    printf("%s -> min: %10u, max: %10u, avg: %10.2f, dev: %10.2f, #: %10u\n",
-           name,
-           agg.min() / div,
-           agg.max() / div,
-           agg.avg() / static_cast<double>(div),
-           agg.standard_deviation(0) / static_cast<double>(div),
-           agg.count());
-  }
-
-  void print_aggregate(const char* name,
-                       const tlx::Aggregate<double>& agg,
-                       size_t div = 1) {
-    auto divf = static_cast<double>(div);
-    printf("%s -> min: %10f, max: %10f, avg: %10.2f, dev: %10.2f, #: #10u\n",
-           name,
-           agg.min() / divf,
-           agg.max() / divf,
-           agg.avg() / divf,
-           agg.standard_deviation(0) / divf,
-           agg.count());
+    printf(
+        "%s -> min: %10u, max: %10u, avCriscog: %10.2f, dev: %10.2f, #: %10u\n",
+        name,
+        static_cast<unsigned int>(agg.min() / div),
+        static_cast<unsigned int>(agg.max() / div),
+        agg.avg() / static_cast<double>(div),
+        agg.standard_deviation(0) / static_cast<double>(div),
+        static_cast<unsigned int>(agg.count()));
   }
 
   /// @brief Scan through the blocks pairwise in order to identify which blocks
@@ -450,31 +448,35 @@ private:
     // pairs' first block respectively
     BlockPairMap map(BT_NUM_THREADS, BT_QUEUE_CAPACITY);
 
-    TimePoint now = Clock::now();
-    std::atomic_size_t num_threads_done = 0;
-    std::atomic_bool last_thread_done = false;
+    std::atomic_size_t threads_done = 0;
+    std::atomic_bool last_done = false;
     auto& barrier = map.barrier();
+#ifdef BT_DBG
+    TimePoint now = Clock::now();
     tlx::Aggregate<size_t> scan_hits;
     tlx::Aggregate<size_t> start_idle_ns;
     tlx::Aggregate<size_t> finish_idle_ns;
     tlx::Aggregate<size_t> total_idle_ns;
     tlx::Aggregate<size_t> handle_queue_ns;
 
-#pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
-    shared(level,                                                              \
-               map,                                                            \
-               text,                                                           \
-               now,                                                            \
-               is_padded,                                                      \
-               num_threads_done,                                               \
-               last_thread_done,                                               \
-               barrier,                                                        \
-               start_idle_ns,                                                  \
-               finish_idle_ns,                                                 \
-               total_idle_ns,                                                  \
-               handle_queue_ns,                                                \
-               scan_hits,                                                      \
-               std::cout)
+#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+      shared(level,                                                            \
+                 map,                                                          \
+                 text,                                                         \
+                 now,                                                          \
+                 is_padded,                                                    \
+                 threads_done,                                                 \
+                 last_done,                                                    \
+                 barrier,                                                      \
+                 start_idle_ns,                                                \
+                 finish_idle_ns,                                               \
+                 total_idle_ns,                                                \
+                 handle_queue_ns,                                              \
+                 scan_hits)
+#else
+#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+      shared(level, map, text, is_padded, threads_done, last_done, barrier)
+#endif
     {
       const size_t thread_id = omp_get_thread_num();
       typename BlockPairMap::Shard shard = map.get_shard(thread_id);
@@ -508,16 +510,16 @@ private:
         shard.insert(hash, i);
       }
       const size_t thread_order =
-          num_threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+          threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
 
       const bool is_last_thread = thread_order == num_threads;
 
       if (is_last_thread) {
-        last_thread_done.store(true, std::memory_order_release);
+        last_done.store(true, std::memory_order_release);
       }
 
       // Now, we handle the queue asynchronously
-      while (!last_thread_done.load(std::memory_order::acquire)) {
+      while (!last_done.load(std::memory_order::acquire)) {
         shard.handle_queue_sync(false);
       }
       barrier.arrive_and_drop();
@@ -525,6 +527,7 @@ private:
 #pragma omp barrier
       shard.handle_queue();
 #pragma omp single
+#ifdef BT_DBG
       {
         bp_hash_pairs_ns +=
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
@@ -533,6 +536,10 @@ private:
         now = Clock::now();
       }
       tlx::Aggregate<size_t> thread_scan_hits;
+#else
+      {
+      }
+#endif
 
       if (start < static_cast<size_t>(num_block_pairs)) {
         RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
@@ -540,15 +547,24 @@ private:
           if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
             continue;
           }
-          scan_windows_in_block_pair(rk, map, block_size, i, thread_scan_hits);
+          scan_windows_in_block_pair(rk,
+                                     map,
+                                     block_size,
+                                     i
+#ifdef BT_DBG
+                                     ,
+                                     thread_scan_hits
+#endif
+          );
         }
       }
 
+#ifdef BT_DBG
       auto& start_idle = shard.start_idle_ns();
       auto& finish_idle = shard.finish_idle_ns();
       auto& handle_queue = shard.handle_queue_ns();
 
-#pragma omp critical
+#  pragma omp critical
       {
         start_idle_ns.add(start_idle.sum());
         finish_idle_ns.add(finish_idle.sum());
@@ -556,8 +572,10 @@ private:
         handle_queue_ns.add(handle_queue.sum());
         scan_hits += thread_scan_hits;
       };
+#endif
     }
 
+#ifdef BT_DBG
     tlx::Aggregate<size_t> map_loads;
 
     for (size_t load : map.map_loads()) {
@@ -573,7 +591,8 @@ private:
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
 
-    assert(map.num_inserts_.load() == map.size());
+    BT_ASSERT(map.num_inserts_.load() == map.size());
+#endif
 
     level.is_internal = std::make_unique<BitVector>(level.num_blocks);
     fill_is_internal(*level.is_internal, map);
@@ -588,7 +607,9 @@ private:
   ///   block index.
   void fill_is_internal(BitVector& is_internal, BlockPairMap& map) {
     const size_type num_blocks = is_internal.size();
+#ifdef BT_DBG
     TimePoint now = Clock::now();
+#endif
     // Set up the packed array holding the markings for each block.
     // Each mark is a 2-bit number.
     // The MSB is 1 iff the block and its successor have a prior
@@ -604,10 +625,12 @@ private:
             }
           }
         });
+#ifdef BT_DBG
     bp_markings_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
+#endif
 
     // Generate the bit vector indicating which blocks are internal
     is_internal[0] = true;
@@ -616,22 +639,11 @@ private:
       const bool block_is_internal = markings[i] != 0b11;
       is_internal[i] = block_is_internal;
     }
+#ifdef BT_DBG
     bp_bitvec_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
-  }
-
-  template <typename K,
-            typename V,
-            template <typename, typename>
-            typename Map,
-            typename Fn>
-  void print_full_size(const SyncShardedMap<K, V, Map, Fn>& map) noexcept {
-    size_t full_size = 0;
-    map.for_each([&full_size](const K& k, const V& v) {
-      full_size += v.occurrences.size();
-    });
-    std::cout << "Full size: " << full_size << std::endl;
+#endif
   }
 
   /// @brief Scan through the windows starting in a block and mark
@@ -649,18 +661,26 @@ private:
   scan_windows_in_block_pair(RabinKarp& rk,
                              BlockPairMap& map,
                              const size_t num_iterations,
-                             const size_type current_block_index,
-                             tlx::Aggregate<size_t>& agg) {
+                             const size_type current_block_index
+#ifdef BT_DBG
+                             ,
+                             tlx::Aggregate<size_t>& agg
+#endif
+  ) {
     for (size_t offset = 0; offset < num_iterations; ++offset, rk.next()) {
       RabinKarpHash current_hash = rk.current_hash();
       // Find the hash of the current window among the hashed block
       // pairs.
       auto found = map.find(current_hash);
       if (found == map.end()) {
+#ifdef BT_DBG
         agg.add(0);
         continue;
       } else {
         agg.add(100);
+#else
+        continue;
+#endif
       }
       PairOccurrences& occurrences = found->second;
       occurrences.update(current_block_index);
@@ -693,32 +713,37 @@ private:
     // A map hashing blocks and saving where they occur.
     BlockMap links(BT_NUM_THREADS, BT_QUEUE_CAPACITY);
 
-    TimePoint now = Clock::now();
-
     // The number of threads finished with hashing blocks
-    std::atomic_size_t num_threads_done = 0;
-    std::atomic_bool last_thread_done = false;
+    std::atomic_size_t num_done = 0;
+    // Whether the last thread is done
+    std::atomic_bool last_done = false;
     auto& barrier = links.barrier();
+#ifdef BT_DBG
+    TimePoint now = Clock::now();
     tlx::Aggregate<size_t> scan_hits;
     tlx::Aggregate<size_t> start_idle_ns;
     tlx::Aggregate<size_t> finish_idle_ns;
     tlx::Aggregate<size_t> total_idle_ns;
     tlx::Aggregate<size_t> handle_queue_ns;
 
-#pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
-    shared(level_data,                                                         \
-               text,                                                           \
-               links,                                                          \
-               now,                                                            \
-               is_padded,                                                      \
-               num_threads_done,                                               \
-               last_thread_done,                                               \
-               barrier,                                                        \
-               start_idle_ns,                                                  \
-               finish_idle_ns,                                                 \
-               total_idle_ns,                                                  \
-               handle_queue_ns,                                                \
-               scan_hits)
+#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+      shared(level_data,                                                       \
+                 text,                                                         \
+                 links,                                                        \
+                 now,                                                          \
+                 is_padded,                                                    \
+                 num_done,                                                     \
+                 last_done,                                                    \
+                 barrier,                                                      \
+                 start_idle_ns,                                                \
+                 finish_idle_ns,                                               \
+                 total_idle_ns,                                                \
+                 handle_queue_ns,                                              \
+                 scan_hits)
+#else
+#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+      shared(level_data, text, links, is_padded, num_done, last_done, barrier)
+#endif
     {
       const size_t num_threads = omp_get_num_threads();
       const size_t thread_id = omp_get_thread_num();
@@ -742,21 +767,23 @@ private:
         shard.insert(hash, {i, 0});
       }
       const size_t thread_order =
-          num_threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+          num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
 
       const bool is_last_thread = thread_order == num_threads;
 
       if (is_last_thread) {
-        last_thread_done.store(true, std::memory_order_release);
+        last_done.store(true, std::memory_order_release);
       }
 
-      while (!last_thread_done.load(std::memory_order::acquire)) {
+      while (!last_done.load(std::memory_order::acquire)) {
         shard.handle_queue_sync(false);
       }
       barrier.arrive_and_drop();
 #pragma omp barrier
       shard.handle_queue();
 #pragma omp single
+#ifdef BT_DBG
+
       {
         b_hash_blocks_ns +=
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
@@ -766,6 +793,10 @@ private:
       }
 
       tlx::Aggregate<size_t> thread_scan_hits;
+#else
+      {
+      }
+#endif
       // Hash every window and find the first occurrences for every
       // block.
       if (start < block_starts.size() - is_padded) {
@@ -777,14 +808,23 @@ private:
           if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
             rk.restart(block_starts[i]);
           }
-          scan_windows_in_block(rk, links, level_data, i, thread_scan_hits);
+          scan_windows_in_block(rk,
+                                links,
+                                level_data,
+                                i
+#ifdef BT_DBG
+                                ,
+                                thread_scan_hits
+#endif
+          );
         }
       }
+#ifdef BT_DBG
       auto& start_idle = shard.start_idle_ns();
       auto& finish_idle = shard.finish_idle_ns();
       auto& handle_queue = shard.handle_queue_ns();
 
-#pragma omp critical
+#  pragma omp critical
       {
         start_idle_ns.add(start_idle.sum());
         finish_idle_ns.add(finish_idle.sum());
@@ -792,7 +832,9 @@ private:
         handle_queue_ns.add(handle_queue.sum());
         scan_hits += thread_scan_hits;
       };
+#endif
     }
+#ifdef BT_DBG
     b_scan_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
@@ -809,7 +851,8 @@ private:
     print_aggregate("Block Idle (ms)        ", total_idle_ns, 1'000'000);
     print_aggregate("Block Handle Queue (ms)", finish_idle_ns, 1'000'000);
 
-    assert(links.num_inserts_.load() == links.size());
+    BT_ASSERT(links.num_inserts_.load() == links.size());
+#endif
 
     // By this point, the map should contain the first occurrences of
     // every respective block's content. We then fill the pointers
@@ -832,9 +875,11 @@ private:
           }
         });
 
+#ifdef BT_DBG
     b_update_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
+#endif
   }
 
   /// @brief Scans through block-sized windows starting inside one block and
@@ -849,18 +894,25 @@ private:
   static void scan_windows_in_block(RabinKarp& rk,
                                     BlockMap& links,
                                     LevelData& level_data,
-                                    const size_type current_block_index,
-                                    tlx::Aggregate<size_t>& hits) {
+                                    const size_type current_block_index
+#ifdef BT_DBG
+                                    ,
+                                    tlx::Aggregate<size_t>& hits
+#endif
+  ) {
     for (size_type offset = 0; offset < level_data.block_size;
          ++offset, rk.next()) {
       const RabinKarpHash hash = rk.current_hash();
       // Find all blocks in the multimap that match our hash
       auto found = links.find(hash);
       if (found == links.end()) {
+#ifdef BT_DBG
         hits.add(0.0);
         continue;
       } else {
         hits.add(100.0);
+#endif
+        continue;
       }
       BlockOccurrences& occurrences = found->second;
       occurrences.update(current_block_index, offset);
@@ -1183,6 +1235,7 @@ private:
     for (size_type child = last_child; child >= first_child; --child) {
       const size_type child_pointer = (*child_level.pointers)[child];
       const size_type child_offset = (*child_level.offsets)[child];
+#ifdef BT_DBG
       if (!(*child_level.is_internal)[child] && child_pointer < 0) {
         std::cout << "non-internal node missing pointer" << std::endl;
         std::cout << level_index << ", " << block_index << " / "
@@ -1190,8 +1243,9 @@ private:
       } else if (child_pointer == PRUNED && child_pointer < 0) {
         std::cout << "pruned node missing pointer" << std::endl;
       }
-      assert(!(*child_level.is_internal)[child] || child_pointer == PRUNED);
-      assert(child_pointer >= 0);
+      BT_ASSERT(!(*child_level.is_internal)[child] || child_pointer == PRUNED);
+      BT_ASSERT(child_pointer >= 0);
+#endif
       // Decrement the counter of where the child points
       (*child_level.counters)[child_pointer] -= 1;
       (*child_level.counters)[child_pointer + 1] -= child_offset > 0;
