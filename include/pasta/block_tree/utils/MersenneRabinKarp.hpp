@@ -2,6 +2,7 @@
  * This file is part of pasta::block_tree
  *
  * Copyright (C) 2022 Daniel Meyer
+ * Copyright (C) 2023 Etienne Palanga
  *
  * pasta::block_tree is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -32,7 +33,9 @@ namespace pasta {
 /// @tparam T The type of the characters in the text.
 /// @tparam size_type The type to use for indexing etc.
 /// @tparam mersenne_exponent If using a mersenne prime 2^p-1, then this should
-/// be p. If this is 0, a normal modulus operation will be used
+///   be p. If this is 0, a normal modulus operation will be used.
+///   Additionally, if this is != 0, then the prime_ attribute will be ignored
+///   and '(1 << mersenne_exponent) - 1' will be used instead.
 ///
 template <class T, class size_type, uint8_t mersenne_exponent = 0>
 class MersenneRabinKarp {
@@ -57,7 +60,8 @@ public:
   /// @param sigma The alphabet size.
   /// @param init The start index of the first hashed window in the text.
   /// @param length The window size.
-  /// @param prime A large prime used for modulus operations.
+  /// @param prime A large prime used for modulus operations
+  ///   iff not using mersenne_exponent.
   MersenneRabinKarp(std::vector<T> const& text,
                     uint64_t sigma,
                     uint64_t init,
@@ -82,6 +86,8 @@ public:
     max_sigma_ = (uint64_t)(sigma_c);
   };
 
+  /// @brief Moves the hasher to the specified start index in the backing
+  ///   vector.
   void restart(uint64_t index) {
     if (index + length_ >= text_.size()) {
       return;
@@ -99,26 +105,33 @@ public:
     if constexpr (mersenne_exponent == 0) {
       return k % prime_;
     } else {
-      uint128_t i = (k & prime_) + (k >> mersenne_exponent);
-      return (i >= prime_) ? i - prime_ : i;
+      constexpr static uint128_t MERSENNE = (1ULL << mersenne_exponent) - 1;
+      uint128_t i = (k & MERSENNE) + (k >> mersenne_exponent);
+      return (i >= MERSENNE) ? i - MERSENNE : i;
     }
   };
 
+  /// @brief Retrieves the hash value at the hasher's current position.
+  /// @return A MersenneHash object representing the current hash value.
   inline MersenneHash<T> current_hash() const {
     return MersenneHash<T>(text_, hash_, init_, length_);
   }
 
+  /// @brief Advances the hasher by one character.
   void next() {
     if (text_.size() <= init_ + length_) {
       return;
     }
+
+    constexpr static uint128_t MERSENNE =
+        mersenne_exponent == 0 ? prime_ : (1ULL << mersenne_exponent) - 1;
 
     uint128_t fp = hash_;
     T out_char = text_[init_];
     T in_char = text_[init_ + length_];
     const uint128_t out_char_influence = mersenneModulo(out_char * max_sigma_);
     // Conditionally add the prime, of the out_char_influence is too large
-    fp += prime_ * (out_char_influence > hash_) - out_char_influence;
+    fp += MERSENNE * (out_char_influence > hash_) - out_char_influence;
     fp *= sigma_;
     fp += in_char;
     fp = mersenneModulo(fp);
