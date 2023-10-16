@@ -36,7 +36,6 @@
 #include <sdsl/util.hpp>
 #include <tlx/math/aggregate.hpp>
 
-#define BT_NUM_THREADS 8
 #define BT_QUEUE_CAPACITY 163840
 
 __extension__ typedef unsigned __int128 uint128_t;
@@ -305,7 +304,7 @@ private:
 
   /// @brief Constructs the block tree.
   /// @param text The input text.
-  void construct(const std::vector<input_type>& text) {
+  void construct(const std::vector<input_type>& text, const size_t threads) {
     const size_type text_len = text.size();
     /// The number of characters a block tree with s top-level blocks and arity
     /// of strictly tau would exceed over the text size
@@ -348,14 +347,14 @@ private:
       TimePoint now = Clock::now();
 #endif
       LevelData& current = levels.back();
-      scan_block_pairs(text, current, is_padded);
+      scan_block_pairs(text, current, is_padded, threads);
 #ifdef BT_DBG
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
       now = Clock::now();
 #endif
-      scan_blocks(text, current, is_padded);
+      scan_blocks(text, current, is_padded, threads);
 #ifdef BT_DBG
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
@@ -437,7 +436,8 @@ private:
   /// @return The block start indices for the next level of the tree
   void scan_block_pairs(const std::vector<input_type>& text,
                         LevelData& level,
-                        const bool is_padded) {
+                        const bool is_padded,
+                        const size_t threads) {
     if (level.num_blocks < 4) {
       level.is_internal = std::make_unique<BitVector>(level.num_blocks, true);
       level.is_internal_rank = std::make_unique<Rank>(*level.is_internal);
@@ -446,7 +446,7 @@ private:
 
     // A map containing hashed block pairs mapped to their indices of the
     // pairs' first block respectively
-    BlockPairMap map(BT_NUM_THREADS, BT_QUEUE_CAPACITY);
+    BlockPairMap map(threads, BT_QUEUE_CAPACITY);
 
     std::atomic_size_t threads_done = 0;
     std::atomic_bool last_done = false;
@@ -459,7 +459,7 @@ private:
     tlx::Aggregate<size_t> total_idle_ns;
     tlx::Aggregate<size_t> handle_queue_ns;
 
-#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+#  pragma omp parallel default(none) threads(BT_NUM_THREADS)                   \
       shared(level,                                                            \
                  map,                                                          \
                  text,                                                         \
@@ -474,16 +474,16 @@ private:
                  handle_queue_ns,                                              \
                  scan_hits)
 #else
-#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+#  pragma omp parallel default(none) num_threads(threads)                      \
       shared(level, map, text, is_padded, threads_done, last_done, barrier)
 #endif
     {
       const size_t thread_id = omp_get_thread_num();
       typename BlockPairMap::Shard shard = map.get_shard(thread_id);
       const size_t num_threads = omp_get_num_threads();
+      const size_t num_block_pairs = level.num_blocks - 1 - is_padded;
       const size_t block_size = level.block_size;
       const size_t pair_size = 2 * block_size;
-      const size_t num_block_pairs = level.num_blocks - 1 - is_padded;
       const auto& block_starts = *level.block_starts;
 
       // Hash every window and determine for all block pairs whether
@@ -696,7 +696,8 @@ private:
   ///   end of the text
   void scan_blocks(const std::vector<input_type>& text,
                    LevelData& level_data,
-                   const bool is_padded) {
+                   const bool is_padded,
+                   const size_t threads) {
     const size_t num_blocks = level_data.num_blocks;
 
     level_data.pointers =
@@ -711,7 +712,7 @@ private:
     }
 
     // A map hashing blocks and saving where they occur.
-    BlockMap links(BT_NUM_THREADS, BT_QUEUE_CAPACITY);
+    BlockMap links(threads, BT_QUEUE_CAPACITY);
 
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_done = 0;
@@ -741,7 +742,7 @@ private:
                  handle_queue_ns,                                              \
                  scan_hits)
 #else
-#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+#  pragma omp parallel default(none) num_threads(threads)                      \
       shared(level_data, text, links, is_padded, num_done, last_done, barrier)
 #endif
     {
@@ -1270,7 +1271,7 @@ public:
     this->s_ = root_arity;
     this->max_leaf_length_ = max_leaf_length;
     this->map_unique_chars(text);
-    construct(text);
+    construct(text, threads);
     omp_set_dynamic(old_dynamic);
     omp_set_num_threads(old);
   }
@@ -1292,5 +1293,3 @@ public:
 };
 
 } // namespace pasta
-
-#undef BT_NUM_THREADS

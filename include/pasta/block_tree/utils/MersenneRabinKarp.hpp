@@ -123,15 +123,17 @@ public:
       return;
     }
 
-    constexpr static uint128_t MERSENNE =
-        mersenne_exponent == 0 ? prime_ : (1ULL << mersenne_exponent) - 1;
-
     uint128_t fp = hash_;
     T out_char = text_[init_];
     T in_char = text_[init_ + length_];
     const uint128_t out_char_influence = mersenneModulo(out_char * max_sigma_);
     // Conditionally add the prime, of the out_char_influence is too large
-    fp += MERSENNE * (out_char_influence > hash_) - out_char_influence;
+    if constexpr (mersenne_exponent == 0) {
+      fp += prime_ * (out_char_influence > hash_) - out_char_influence;
+    } else {
+      fp += ((1ULL << mersenne_exponent) - 1) * (out_char_influence > hash_) -
+            out_char_influence;
+    }
     fp *= sigma_;
     fp += in_char;
     fp = mersenneModulo(fp);

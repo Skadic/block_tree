@@ -26,7 +26,6 @@
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 #include "pasta/block_tree/utils/mpsc_queue/jiffy.hpp"
-#include "pasta/block_tree/utils/mpsc_queue/queue.hpp"
 #include "pasta/block_tree/utils/mpsc_queue/stupid_queue.hpp"
 #include "pasta/block_tree/utils/sharded_map.hpp"
 
@@ -58,7 +57,7 @@ namespace pasta {
 template <std::integral input_type,
           std::signed_integral size_type,
           template <typename> typename queue_type = StupidQueue>
-class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
+class BlockTreeFPParSharded : public BlockTree<input_type, size_type> {
   using Clock = std::chrono::high_resolution_clock;
   using TimePoint = Clock::time_point;
 
@@ -259,7 +258,7 @@ private:
     ///   block index and updating the first occurrence if needed
     /// @param occurrences A reference to the occurrences in the map
     /// @param input_value The new block index to add to the occurrences
-    inline static void update(RabinKarpHash&,
+    inline static void update(const RabinKarpHash&,
                               PairOccurrences& occurrences,
                               InputValue&& input_value) {
       occurrences.add_block_pair(input_value);
@@ -269,7 +268,7 @@ private:
     /// @brief Initialize the occurrences of a hashed block pair
     /// @param input_value The block index of the pair's first block
     /// @return The initialized occurrences only containing the given block pair
-    inline static PairOccurrences init(RabinKarpHash&,
+    inline static PairOccurrences init(const RabinKarpHash&,
                                        InputValue&& input_value) {
       PairOccurrences occurrences(input_value);
       occurrences.add_block_pair(input_value);
@@ -290,7 +289,7 @@ private:
     /// @param occurrences A reference to the occurrences in the map
     /// @param input_value The new block index and offset to add to the
     ///   occurrences
-    inline static void update(RabinKarpHash&,
+    inline static void update(const RabinKarpHash&,
                               BlockOccurrences& occurrences,
                               InputValue&& input_value) {
       occurrences.add_block(input_value.first);
@@ -301,7 +300,7 @@ private:
     /// @param input_value A pair of the block index and offset of one of the
     ///   block's occurrences
     /// @return The initialized occurrences only containing the given block
-    inline static BlockOccurrences init(RabinKarpHash&,
+    inline static BlockOccurrences init(const RabinKarpHash&,
                                         InputValue&& input_value) {
       BlockOccurrences occurrences(input_value.first);
       occurrences.add_block(input_value.first);
@@ -1055,11 +1054,11 @@ private:
   }
 
 public:
-  BlockTreeFPParShardedSync(const std::vector<input_type>& text,
-                            const size_t arity,
-                            const size_t root_arity,
-                            const size_t max_leaf_length,
-                            const size_t threads) {
+  BlockTreeFPParSharded(const std::vector<input_type>& text,
+                        const size_t arity,
+                        const size_t root_arity,
+                        const size_t max_leaf_length,
+                        const size_t threads) {
     const auto old = omp_get_max_threads();
     const auto old_dynamic = omp_get_dynamic();
     omp_set_dynamic(0);
@@ -1073,7 +1072,7 @@ public:
     omp_set_num_threads(old);
   }
 
-  ~BlockTreeFPParShardedSync() {
+  ~BlockTreeFPParSharded() {
     for (auto& rank : this->block_tree_types_rs_) {
       delete rank;
     }

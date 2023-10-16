@@ -22,14 +22,99 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-// #include <thread>
-//  #include <pasta/block_tree/construction/block_tree_fp.hpp>
-//  #include <pasta/block_tree/construction/block_tree_fp2_seq.hpp>
-//  #include <pasta/block_tree/construction/block_tree_fp_par_phmap.hpp>
-//  #include <pasta/block_tree/construction/block_tree_fp_par_growt.hpp>
-#include <pasta/block_tree/construction/block_tree_fp_par_sync_sharded.hpp>
-//    #include <pasta/block_tree/construction/block_tree_fp_par3.hpp>
-// #include <pasta/block_tree/construction/block_tree_lpf.hpp>
+#include <pasta/block_tree/block_tree.hpp>
+
+#define PAR_PHMAP
+#ifdef FP
+#  include <pasta/block_tree/construction/block_tree_fp.hpp>
+std::unique_ptr<BT> make_bt(std::vector<uint8_t>& text,
+                            const size_t arity,
+                            const size_t leaf_length,
+                            const size_t) {
+  ;
+  return std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>(
+      pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length));
+}
+#  define ALGO_NAME "fp"
+#elif defined FP2
+#  include <pasta/block_tree/construction/block_tree_fp2_seq.hpp>
+std::unique_ptr<pasta::BlockTreeFP2<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t) {
+  ;
+  return std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(text,
+                                                                 arity,
+                                                                 1,
+                                                                 leaf_length);
+}
+#  define ALGO_NAME "fp2"
+#elif defined LPF
+#  include <pasta/block_tree/construction/block_tree_lpf.hpp>
+std::unique_ptr<BT> make_bt(std::vector<uint8_t>& text,
+                            const size_t arity,
+                            const size_t leaf_length,
+                            const size_t threads) {
+  ;
+  return std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>>(
+      pasta::make_block_tree_lpf_parallel<uint8_t, int32_t>(text,
+                                                            arity,
+                                                            leaf_length,
+                                                            true,
+                                                            threads));
+}
+#  define ALGO_NAME "lpf"
+#elif defined PAR_SHARDED
+#  include <pasta/block_tree/construction/block_tree_fp_par_sharded.hpp>
+std::unique_ptr<pasta::BlockTreeFPParSharded<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads) {
+  ;
+  return std::make_unique<pasta::BlockTreeFPParSharded<uint8_t, int32_t>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads);
+}
+#  define ALGO_NAME "shard"
+#elif defined PAR_SHARDED_SYNC
+#  include <pasta/block_tree/construction/block_tree_fp_par_sync_sharded.hpp>
+std::unique_ptr<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads) {
+  ;
+  return std::make_unique<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads);
+}
+#  define ALGO_NAME "shard_sync"
+#elif defined PAR_PHMAP
+#  include <pasta/block_tree/construction/block_tree_fp_par_phmap.hpp>
+std::unique_ptr<pasta::BlockTreeFPParPH<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads) {
+  ;
+  return std::make_unique<pasta::BlockTreeFPParPH<uint8_t, int32_t>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads);
+}
+#  define ALGO_NAME "par_map"
+#endif
+
 #include <sstream>
 #include <string>
 
@@ -54,31 +139,32 @@ int main(int argc, char** argv) {
     exit(1);
   }
 
-  size_t arity = atoi(argv[2]);
+  const size_t arity = atoi(argv[2]);
 
   if (argc < 4) {
-    std::cerr << "Please input root arity (s)" << std::endl;
-    exit(1);
-  }
-
-  size_t root_arity = atoi(argv[3]);
-
-  if (argc < 5) {
     std::cerr << "Please input max leaf length" << std::endl;
     exit(1);
   }
 
-  size_t leaf_length = atoi(argv[4]);
+  const size_t leaf_length = atoi(argv[3]);
+
+  if (argc < 5) {
+    std::cerr << "Please input number of threads (ignored if single threaded "
+                 "algorithm)"
+              << std::endl;
+    exit(1);
+  }
+
+  const size_t threads = atoi(argv[4]);
 
   std::stringstream ss;
-  ss << argv[1] << "_arit" << arity << "_root" << root_arity << "_leaf"
-     << leaf_length << "_new.bt";
+  ss << argv[1] << "_arit" << arity << "_leaf" << leaf_length << "_new.bt";
   std::string out_path = ss.str();
 
   std::cout << "building block tree with parameters:"
-            << "\narity: " << arity << "\nroot arity: " << root_arity
-            << "\nmax leaf length: " << leaf_length << "\nsaving to "
-            << out_path << std::endl;
+            << "\narity: " << arity << "\nmax leaf length: " << leaf_length
+            << "\nsaving to " << out_path << "\nusing " << threads << " threads"
+            << std::endl;
 
   std::vector<uint8_t> text;
   {
@@ -91,62 +177,32 @@ int main(int argc, char** argv) {
   }
 
   TimePoint now = Clock::now();
-
-  /*
-  auto bt = std::make_unique<pasta::BlockTree<uint8_t, int32_t>>(text,
-                                                                 arity,
-                                                                 root_arity,
-                                                                 leaf_length);
-                                                                 */
-
-  /*
-  std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>> bt(
-      pasta::make_block_tree_lpf_parallel<uint8_t, int32_t>(text,
-                                                            arity,
-                                                            leaf_length,
-                                                            true,
-                                                            8));
-                                                            */
-  /*
-  auto bt =
-      std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(text,
-                                                              arity,
-                                                              root_arity,
-                                                              leaf_length);
-                                                              */
-  auto bt =
-      std::make_unique<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>(
-          text,
-          arity,
-          root_arity,
-          leaf_length,
-          8);
-  /*
-  auto bt =
-      std::make_unique<pasta::BlockTreeFPParPH<uint8_t, int32_t>>(text,
-                                                                  arity,
-                                                                  root_arity,
-                                                                  leaf_length,
-                                                                  8);
-*/
+  auto bt = make_bt(text, arity, leaf_length, threads);
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
           .count();
 
-  std::cout << "bt size: " << bt->print_space_usage() / 1000 << "kb\n"
-            << "Time: " << elapsed << "ms" << std::endl;
+  std::cout << "RESULT file="
+            << std::filesystem::path(argv[1]).filename().string()
+            << " arity=" << arity << " leaf_length=" << leaf_length << " time
+      = " << elapsed << " threads = " << threads
+                                    << " space=" << bt->print_space_usage()
+                                    << std::endl;
 
   // std::ofstream ot(out_path);
   //  bt->serialize(ot);
+  /*
 #pragma omp parallel for
   for (size_t i = 0; i < text.size(); ++i) {
     const auto c = bt->access(i);
     if (c != text[i]) {
-      std::cerr << "Error at position " << i << "\nExpected: " << (char)text[i]
+      std::cerr << "Error at position " << i << "\nExpected: " <<
+(char)text[i]
                 << "\nActual: " << c << std::endl;
       exit(1);
     }
   }
+   */
   // ot.close();
 
   return 0;
