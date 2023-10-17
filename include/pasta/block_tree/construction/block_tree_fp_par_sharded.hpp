@@ -40,9 +40,8 @@
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 
-#define BT_NUM_THREADS 8
 #define BT_FILL_THRESHOLD 0.5
-#define BT_QUEUE_CAPACITY 1024
+#define BT_QUEUE_CAPACITY 163840
 
 __extension__ typedef unsigned __int128 uint128_t;
 
@@ -56,7 +55,7 @@ namespace pasta {
 ///   in the sharded hash map.
 template <std::integral input_type,
           std::signed_integral size_type,
-          template <typename> typename queue_type = StupidQueue>
+          template <typename> typename queue_type = JiffyQueue>
 class BlockTreeFPParSharded : public BlockTree<input_type, size_type> {
   using Clock = std::chrono::high_resolution_clock;
   using TimePoint = Clock::time_point;
@@ -101,6 +100,7 @@ class BlockTreeFPParSharded : public BlockTree<input_type, size_type> {
   using RabinKarpMap =
       ShardedMap<RabinKarpHash, value_type, SeqHashMap, Queue, update_fn_type>;
 
+#ifdef BT_DBG
 public:
   size_t bp_hash_pairs_ns = 0;
   size_t bp_scan_pairs_ns = 0;
@@ -112,6 +112,7 @@ public:
   size_t b_update_blocks_ns = 0;
 
 private:
+#endif
   /// @brief Contains data about a block tree level under construction
   struct LevelData {
     /// @brief Contains a 1 for each internal block (= block with children)
@@ -316,7 +317,7 @@ private:
 
   /// @brief Constructs the block tree.
   /// @param text The input text.
-  void construct(const std::vector<input_type>& text) {
+  void construct(const std::vector<input_type>& text, const size_t threads) {
     const size_type text_len = text.size();
     /// The number of characters a block tree with s top-level blocks and arity
     /// of strictly tau would exceed over the text size
@@ -342,35 +343,49 @@ private:
     top_level.block_size = top_block_size;
     top_level.num_blocks = top_level.block_starts->size();
 
+#ifdef BT_DBG
     size_t pairs_ns = 0;
     size_t blocks_ns = 0;
     size_t generate_ns = 0;
+#endif
 
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
+#ifdef BT_DBG
       std::cout << "level " << level << std::endl;
-      LevelData& current = levels.back();
-
       TimePoint now = Clock::now();
-      scan_block_pairs(text, current, is_padded);
+#endif
+      LevelData& current = levels.back();
+      scan_block_pairs(text, current, is_padded, threads);
+#ifdef BT_DBG
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
       now = Clock::now();
-      scan_blocks(text, current, is_padded);
+#endif
+
+#ifdef BT_DBG
+      scan_blocks(text, current, is_padded, threads);
+#endif
+
+#ifdef BT_DBG
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
                        .count();
       now = Clock::now();
+#endif
 
       // Generate the next level (if we're not at the last level)
       if (level < static_cast<size_t>(tree_height) - 1) {
         levels.push_back(std::move(generate_next_level(text, current)));
       }
+#ifdef BT_DBG
       generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                          Clock::now() - now)
                          .count();
+#endif
     }
+#ifdef BT_DBG
     TimePoint now = Clock::now();
 
     std::cout << "pairs: " << (pairs_ns / 1'000'000)
@@ -384,18 +399,23 @@ private:
               << "ms,\n\tupdate blocks: " << (b_update_blocks_ns / 1'000'000)
               << "ms,\ngenerate_next: " << (generate_ns / 1'000'000) << "ms,"
               << std::endl;
+#endif
     prune(levels);
+#ifdef BT_DBG
     size_t prune_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
 
     std::cout << "prune: " << (prune_ns / 1'000'000) << "ms," << std::endl;
+#endif
     make_tree(text, levels, padding);
+#ifdef BT_DBG
     size_t make_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     std::cout << "make: " << (make_ns / 1'000'000) << "ms" << std::endl;
+#endif
   }
 
   /// @brief Returns the ceiling of x / y for x > 0;
@@ -416,7 +436,8 @@ private:
   /// @return The block start indices for the next level of the tree
   void scan_block_pairs(const std::vector<input_type>& text,
                         LevelData& level,
-                        const bool is_padded) {
+                        const bool is_padded,
+                        const size_t threads) {
     if (level.num_blocks < 4) {
       level.is_internal = std::make_unique<BitVector>(level.num_blocks, true);
       level.is_internal_rank = std::make_unique<Rank>(*level.is_internal);
@@ -425,13 +446,18 @@ private:
 
     // A map containing hashed block pairs mapped to their indices of the
     // pairs' first block respectively
-    BlockPairMap map(BT_FILL_THRESHOLD, BT_NUM_THREADS, BT_QUEUE_CAPACITY);
+    BlockPairMap map(BT_FILL_THRESHOLD, threads, BT_QUEUE_CAPACITY);
 
-    TimePoint now = Clock::now();
     std::atomic_size_t num_threads_finished = 0;
 
-#pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
-    shared(level, map, text, now, is_padded, std::cout, num_threads_finished)
+#ifdef BT_DBG
+    TimePoint now = Clock::now();
+#  pragma omp parallel default(none) num_threads(threads)                      \
+      shared(level, map, text, now, is_padded, num_threads_finished)
+#else
+#  pragma omp parallel default(none) num_threads(threads)                      \
+      shared(level, map, text, is_padded, num_threads_finished)
+#endif
     {
       const size_t thread_id = omp_get_thread_num();
       typename BlockPairMap::Shard shard = map.get_shard(thread_id);
@@ -475,7 +501,8 @@ private:
         shard.handle_queue();
       } while (num_threads_finished.load() < num_threads);
 #pragma omp barrier
-#pragma omp single
+#ifdef BT_DBG
+#  pragma omp single
       {
         bp_hash_pairs_ns +=
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
@@ -483,6 +510,7 @@ private:
                 .count();
         now = Clock::now();
       }
+#endif
 
       if (start < static_cast<size_t>(num_block_pairs)) {
         RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
@@ -495,9 +523,11 @@ private:
       }
     }
 
+#ifdef BT_DBG
     bp_scan_pairs_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
+#endif
 
     level.is_internal = std::make_unique<BitVector>(level.num_blocks);
     fill_is_internal(*level.is_internal, map);
@@ -512,7 +542,9 @@ private:
   ///     block index.
   void fill_is_internal(BitVector& is_internal, BlockPairMap& map) {
     const size_type num_blocks = is_internal.size();
+#ifdef BT_DBG
     TimePoint now = Clock::now();
+#endif
     // Set up the packed array holding the markings for each block.
     // Each mark is a 2-bit number.
     // The MSB is 1 iff the block and its successor have a prior occurrence.
@@ -527,10 +559,13 @@ private:
             }
           }
         });
+
+#ifdef BT_DBG
     bp_markings_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
+#endif
 
     // Generate the bit vector indicating which blocks are internal
 
@@ -540,9 +575,11 @@ private:
       const bool block_is_internal = markings[i] != 0b11;
       is_internal[i] = block_is_internal;
     }
+#ifdef BT_DBG
     bp_bitvec_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
+#endif
   }
 
   /// @brief Scan through the windows starting in a block and mark
@@ -582,7 +619,8 @@ private:
   ///   end of the text
   void scan_blocks(const std::vector<input_type>& text,
                    LevelData& level_data,
-                   const bool is_padded) {
+                   const bool is_padded,
+                   const size_t threads) {
     const size_t num_blocks = level_data.num_blocks;
 
     level_data.pointers =
@@ -597,14 +635,18 @@ private:
     }
 
     // A map hashing blocks and saving where they occur.
-    BlockMap links(BT_FILL_THRESHOLD, BT_NUM_THREADS, BT_QUEUE_CAPACITY);
-
-    TimePoint now = Clock::now();
+    BlockMap links(BT_FILL_THRESHOLD, threads, BT_QUEUE_CAPACITY);
 
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_threads_finished = 0;
-#pragma omp parallel default(none) num_threads(BT_NUM_THREADS)                 \
-    shared(level_data, text, links, now, is_padded, num_threads_finished)
+#ifdef BT_DBG
+    TimePoint now = Clock::now();
+#  pragma omp parallel default(none) num_threads(threads)                      \
+      shared(level_data, text, links, now, is_padded, num_threads_finished)
+#else
+#  pragma omp parallel default(none) num_threads(threads)                      \
+      shared(level_data, text, links, is_padded, num_threads_finished)
+#endif
     {
       const size_t num_threads = omp_get_num_threads();
       const size_t thread_id = omp_get_thread_num();
@@ -621,11 +663,6 @@ private:
                                           (thread_id + 1) * segment_size);
 
       // Hash each block and store their hashes in the map
-      // FIXME This causes issues when run in parallel
-      //  In make_tree, we get an error when deallocating vectors in LevelData
-      //  Seems like in this case, the algorithm fails to identify some earlier
-      //  occurrences for non-internal blocks, leading to writes to offsets[-1]
-      //  etc. later on.
       for (size_t i = start; i < end; ++i) {
         const RabinKarp rk(text, SIGMA, block_starts[i], block_size, PRIME);
         RabinKarpHash hash = rk.current_hash();
@@ -642,15 +679,16 @@ private:
       do {
         shard.handle_queue();
       } while (num_threads_finished.load() < num_threads);
-#pragma omp single
+#ifdef BT_DBG
+#  pragma omp single
       {
         b_hash_blocks_ns +=
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
                                                                  now)
                 .count();
         now = Clock::now();
-        // links.print_map_loads();
       }
+#endif
 
       // Hash every window and find the first occurrences for every block.
       if (start < block_starts.size() - is_padded) {
@@ -666,10 +704,12 @@ private:
         }
       }
     }
+#ifdef BT_DBG
     b_scan_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
+#endif
 
     // By this point, the map should contain the first occurrences of every
     // respective block's content. We then fill the pointers and offsets with
@@ -692,9 +732,11 @@ private:
           }
         });
 
+#ifdef BT_DBG
     b_update_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
+#endif
   }
 
   /// @brief Scans through block-sized windows starting inside one block and
@@ -975,7 +1017,8 @@ private:
   /// @return Whether this block is/stays internal after the pruning process
   bool prune_block(std::vector<LevelData>& levels,
                    const size_t level_index,
-                   const size_t block_index) {
+                   const size_t block_index_) {
+    volatile size_t block_index = block_index_;
     LevelData& level = levels[level_index];
     BitVector& is_internal = *level.is_internal;
 
@@ -993,7 +1036,7 @@ private:
     // none of which can be pointed to. So only recurse, if we are not on the
     // last level.
     if (level_index < levels.size() - 1) {
-      const size_type last_child =
+      volatile size_type last_child =
           std::min<size_type>(first_child + this->tau_ - 1,
                               levels[level_index + 1].is_internal->size() - 1);
       // Iterate through children in reverse
@@ -1007,9 +1050,9 @@ private:
       return true;
     }
 
-    const size_type pointer = (*level.pointers)[block_index];
-    const size_type offset = (*level.offsets)[block_index];
-    const size_type counter = (*level.counters)[block_index];
+    volatile size_type pointer = (*level.pointers)[block_index];
+    volatile size_type offset = (*level.offsets)[block_index];
+    volatile size_type counter = (*level.counters)[block_index];
     // If there is no earlier occurrence or there are blocks pointing to this,
     // then this must stay internal
     if (pointer == NO_EARLIER_OCC || counter > 0) {
@@ -1035,12 +1078,14 @@ private:
     for (size_type child = last_child; child >= first_child; --child) {
       const size_type child_pointer = (*child_level.pointers)[child];
       const size_type child_offset = (*child_level.offsets)[child];
+#ifdef BT_DBG
       if (!(*child_level.is_internal)[child] && child_pointer < 0) {
         std::cout << "non-internal node missing pointer" << std::endl;
         std::cout << level_index << ", " << block_index << std::endl;
       } else if (child_pointer == PRUNED && child_pointer < 0) {
         std::cout << "pruned node missing pointer" << std::endl;
       }
+#endif
       assert(!(*child_level.is_internal)[child] || child_pointer == PRUNED);
       assert(child_pointer >= 0);
       // Decrement the counter of where the child points
@@ -1067,7 +1112,7 @@ public:
     this->s_ = root_arity;
     this->max_leaf_length_ = max_leaf_length;
     this->map_unique_chars(text);
-    construct(text);
+    construct(text, threads);
     omp_set_dynamic(old_dynamic);
     omp_set_num_threads(old);
   }
@@ -1135,5 +1180,3 @@ public:
 }; // namespace pasta
 
 } // namespace pasta
-
-#undef BT_NUM_THREADS
