@@ -334,7 +334,7 @@ private:
     size_t pairs_ns = 0;
     size_t blocks_ns = 0;
     size_t generate_ns = 0;
-
+    
     std::cout << "using " << BT_NUM_THREADS << " threads" << std::endl;
 #endif
 
@@ -459,7 +459,7 @@ private:
     tlx::Aggregate<size_t> total_idle_ns;
     tlx::Aggregate<size_t> handle_queue_ns;
 
-#  pragma omp parallel default(none) threads(BT_NUM_THREADS)                   \
+#  pragma omp parallel default(none) threads(threads)                          \
       shared(level,                                                            \
                  map,                                                          \
                  text,                                                         \
@@ -727,7 +727,7 @@ private:
     tlx::Aggregate<size_t> total_idle_ns;
     tlx::Aggregate<size_t> handle_queue_ns;
 
-#  pragma omp parallel default(none) num_threads(BT_NUM_THREADS)               \
+#  pragma omp parallel default(none) num_threads(threads)                      \
       shared(level_data,                                                       \
                  text,                                                         \
                  links,                                                        \

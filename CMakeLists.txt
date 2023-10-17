@@ -37,6 +37,7 @@ option(PASTA_BLOCK_TREE_BUILD_EXAMPLES
 option(PASTA_BLOCK_TREE_DEBUG
         "Add instrumentation, calculating time etc." ON)
 
+include(ExternalProject)
 # Optional test
 if (PASTA_BLOCK_TREE_BUILD_TESTS)
   include(FetchContent)
@@ -64,6 +65,27 @@ if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
   if (PASTA_BLOCK_TREE_DEBUG)
     target_compile_definitions(build_bt PRIVATE BT_DBG)
   endif ()
+
+  if (PASTA_BLOCK_TREE_MALLOC_COUNT)
+    message(DEBUG "malloc_count enabled")
+    # malloc_count
+    ExternalProject_Add(malloc_count
+            PREFIX ${CMAKE_CURRENT_BINARY_DIR}
+            GIT_REPOSITORY    git@github.com:Skadic/malloc_count.git
+            BUILD_COMMAND gcc -c -fpic -ldl ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count/malloc_count.c
+            CONFIGURE_COMMAND ""
+            INSTALL_COMMAND ""
+          )
+
+    add_library(libmalloc_count INTERFACE)
+    target_include_directories(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
+    target_link_libraries(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count-build/malloc_count.o)
+
+    target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/extlib/malloc_count)
+    target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
+    #target_link_libraries(build_bt libmalloc_count)
+    #target_compile_definitions(build_bt PRIVATE BT_MALLOC_COUNT)
+  endif()
 
 endif ()
 

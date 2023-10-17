@@ -60,15 +60,17 @@
       }
     },
     {
-      "name": "lax",
-      "displayName": "Lax Ninja Multi-Config",
-      "description": "Use Ninja Multi-Config generator with lax warnings",
-      "generator": "Ninja Multi-Config",
-      "binaryDir": "${sourceDir}/build_lax",
+      "name": "bench",
+      "displayName": "Behcnmarking Configuration",
+      "description": "Release build with malloc_count",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build_bench",
       "inherits": "default",
       "cacheVariables": {
         "PASTA_BLOCK_TREE_BUILD_EXAMPLES": "ON",
-        "CMAKE_CXX_FLAGS": "-fopenmp -w -march=native -fdiagnostics-color=always"
+        "CMAKE_CXX_FLAGS": "-fopenmp -Wall -Wextra -pedantic -Werror -march=native -fdiagnostics-color=always -g -O3 -ldl",
+        "CMAKE_BUILD_TYPE": "Release",
+        "PASTA_BLOCK_TREE_MALLOC_COUNT": "ON"
       }
     }
   ],
@@ -101,14 +103,8 @@
       "configuration": "Debug"
     },
     {
-      "name": "release-lax",
-      "configurePreset": "lax",
-      "configuration": "Release"
-    },
-    {
-      "name": "relwithdeb-lax",
-      "configurePreset": "lax",
-      "configuration": "RelWithDebInfo"
+      "name": "bench",
+      "configurePreset": "bench"
     }
   ],
   "testPresets": [

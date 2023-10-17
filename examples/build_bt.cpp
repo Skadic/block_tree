@@ -24,7 +24,7 @@
 #include <iostream>
 #include <pasta/block_tree/block_tree.hpp>
 
-#define FP2
+#define LPF
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -117,6 +117,9 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "par_map"
 #endif
 
+#ifdef BT_MALLOC_COUNT
+#include <malloc_count.h>
+#endif
 #include <sstream>
 #include <string>
 
@@ -190,7 +193,14 @@ int main(int argc, char** argv) {
             << " file=" << std::filesystem::path(argv[1]).filename().string()
             << " arity=" << arity << " leaf_length=" << leaf_length
             << " time=" << elapsed << " threads=" << threads
-            << " space=" << bt->print_space_usage() << std::endl;
+            << " space=" << bt->print_space_usage();
+
+
+#ifdef BT_MALLOC_COUNT
+  std::cout << " memory=" << malloc_count_peak();
+#endif
+
+  std::cout << std::endl;
 
   // std::ofstream ot(out_path);
   //  bt->serialize(ot);
