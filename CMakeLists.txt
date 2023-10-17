@@ -39,31 +39,31 @@ option(PASTA_BLOCK_TREE_DEBUG
 
 # Optional test
 if (PASTA_BLOCK_TREE_BUILD_TESTS)
-    include(FetchContent)
-    FetchContent_Declare(
+  include(FetchContent)
+  FetchContent_Declare(
             googletest
             GIT_REPOSITORY https://github.com/google/googletest.git
             GIT_TAG release-1.12.1
     )
-    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-    FetchContent_MakeAvailable(googletest)
-    enable_testing()
-    include(GoogleTest)
-    add_subdirectory(tests)
+  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+  FetchContent_MakeAvailable(googletest)
+  enable_testing()
+  include(GoogleTest)
+  add_subdirectory(tests)
 endif ()
 if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
-    add_executable(block_tree_construction
+  add_executable(block_tree_construction
             examples/block_tree_construction.cpp)
-    target_link_libraries(block_tree_construction
+  target_link_libraries(block_tree_construction
             pasta_block_tree)
 
-    add_executable(build_bt
+  add_executable(build_bt
             examples/build_bt.cpp)
-    target_link_libraries(build_bt
+  target_link_libraries(build_bt
             pasta_block_tree)
-    if (PASTA_BLOCK_TREE_DEBUG)
-        target_compile_definitions(build_bt PRIVATE BT_DBG)
-    endif ()
+  if (PASTA_BLOCK_TREE_DEBUG)
+    target_compile_definitions(build_bt PRIVATE BT_DBG)
+  endif ()
 
 endif ()
 
@@ -73,7 +73,8 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/robin-hood-hashing)
 
-#add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite)
+set(BUILD_DIVSUFSORT64 ON CACHE BOOL "Build libdivsufsort in 64-bits mode")
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/external/libdivsufsort)
 
 add_library(waitfree-mpsc-queue
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/waitfree-mpsc-queue/mpsc.c)
@@ -96,6 +97,9 @@ file(GLOB sdsl_sources ${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/lib/*.cpp)
 add_library(sdsl ${sdsl_sources})
 target_include_directories(sdsl SYSTEM INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/include)
+target_include_directories(sdsl SYSTEM INTERFACE
+  ${CMAKE_CURRENT_BINARY_DIR}/extlib/sdsl-lite/external/libdivsufsort/include)
+target_link_libraries(sdsl PUBLIC divsufsort64)
 set_target_properties(sdsl PROPERTIES COMPILE_FLAGS "-w")
 
 target_link_libraries(pasta_block_tree INTERFACE
@@ -104,10 +108,9 @@ target_link_libraries(pasta_block_tree INTERFACE
         tlx
         robin_hood
         waitfree-mpsc-queue
+        sdsl
         #jiffy
         jiffy1)
-target_link_libraries(pasta_block_tree INTERFACE
-        sdsl)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/growt)
 target_include_directories(pasta_block_tree INTERFACE
