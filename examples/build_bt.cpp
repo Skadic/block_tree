@@ -24,13 +24,14 @@
 #include <iostream>
 #include <pasta/block_tree/block_tree.hpp>
 
-#define PAR_PHMAP
+#define FP2
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
-std::unique_ptr<BT> make_bt(std::vector<uint8_t>& text,
-                            const size_t arity,
-                            const size_t leaf_length,
-                            const size_t) {
+std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t) {
   ;
   return std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>(
       pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length));
@@ -52,10 +53,11 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "fp2"
 #elif defined LPF
 #  include <pasta/block_tree/construction/block_tree_lpf.hpp>
-std::unique_ptr<BT> make_bt(std::vector<uint8_t>& text,
-                            const size_t arity,
-                            const size_t leaf_length,
-                            const size_t threads) {
+std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads) {
   ;
   return std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>>(
       pasta::make_block_tree_lpf_parallel<uint8_t, int32_t>(text,
@@ -161,10 +163,12 @@ int main(int argc, char** argv) {
   ss << argv[1] << "_arit" << arity << "_leaf" << leaf_length << "_new.bt";
   std::string out_path = ss.str();
 
+#ifdef BT_DBG
   std::cout << "building block tree with parameters:"
             << "\narity: " << arity << "\nmax leaf length: " << leaf_length
             << "\nsaving to " << out_path << "\nusing " << threads << " threads"
             << std::endl;
+#endif
 
   std::vector<uint8_t> text;
   {
@@ -182,27 +186,23 @@ int main(int argc, char** argv) {
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
           .count();
 
-  std::cout << "RESULT file="
-            << std::filesystem::path(argv[1]).filename().string()
-            << " arity=" << arity << " leaf_length=" << leaf_length << " time
-      = " << elapsed << " threads = " << threads
-                                    << " space=" << bt->print_space_usage()
-                                    << std::endl;
+  std::cout << "RESULT algo=" << ALGO_NAME
+            << " file=" << std::filesystem::path(argv[1]).filename().string()
+            << " arity=" << arity << " leaf_length=" << leaf_length
+            << " time=" << elapsed << " threads=" << threads
+            << " space=" << bt->print_space_usage() << std::endl;
 
   // std::ofstream ot(out_path);
   //  bt->serialize(ot);
-  /*
 #pragma omp parallel for
   for (size_t i = 0; i < text.size(); ++i) {
     const auto c = bt->access(i);
     if (c != text[i]) {
-      std::cerr << "Error at position " << i << "\nExpected: " <<
-(char)text[i]
+      std::cerr << "Error at position " << i << "\nExpected: " << (char)text[i]
                 << "\nActual: " << c << std::endl;
       exit(1);
     }
   }
-   */
   // ot.close();
 
   return 0;
