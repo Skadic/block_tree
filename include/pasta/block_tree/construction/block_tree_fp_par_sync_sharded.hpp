@@ -87,7 +87,7 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
   using RabinKarpMap =
       SyncShardedMap<RabinKarpHash, value_type, SeqHashMap, update_fn_type>;
 
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
 public:
   size_t bp_hash_pairs_ns = 0;
   size_t bp_scan_pairs_ns = 0;
@@ -330,12 +330,13 @@ private:
     top_level.block_size = top_block_size;
     top_level.num_blocks = top_level.block_starts->size();
 
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     size_t pairs_ns = 0;
     size_t blocks_ns = 0;
     size_t generate_ns = 0;
-    
-    std::cout << "using " << BT_NUM_THREADS << " threads" << std::endl;
+#endif
+#ifdef BT_DBG
+    std::cout << "using " << threads << " threads" << std::endl;
 #endif
 
     // Construct the pre-pruned tree level by level
@@ -343,19 +344,21 @@ private:
 #ifdef BT_DBG
       std::cout << "----------------- level " << level << " -----------------"
                 << std::endl;
+#endif
 
+#ifdef BT_INSTRUMENT
       TimePoint now = Clock::now();
 #endif
       LevelData& current = levels.back();
       scan_block_pairs(text, current, is_padded, threads);
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
       now = Clock::now();
 #endif
       scan_blocks(text, current, is_padded, threads);
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
                        .count();
@@ -366,15 +369,14 @@ private:
       if (level < static_cast<size_t>(tree_height) - 1) {
         levels.push_back(std::move(generate_next_level(text, current)));
       }
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                          Clock::now() - now)
                          .count();
 #endif
     }
-#ifdef BT_DBG
-    TimePoint now = Clock::now();
-
+#ifdef BT_INSTRUMENT
+#  if defined(BT_DBG)
     std::cout << "pairs: " << (pairs_ns / 1'000'000)
               << "ms,\n\thash pairs: " << (bp_hash_pairs_ns / 1'000'000)
               << "ms,\n\tscan pairs: " << (bp_scan_pairs_ns / 1'000'000)
@@ -386,22 +388,44 @@ private:
               << "ms,\n\tupdate blocks: " << (b_update_blocks_ns / 1'000'000)
               << "ms,\ngenerate_next: " << (generate_ns / 1'000'000) << "ms,"
               << std::endl;
+#  elif defined(BT_BENCH)
+    std::cout << " pairs=" << (pairs_ns / 1'000'000)
+              << " hash_pairs=" << (bp_hash_pairs_ns / 1'000'000)
+              << " scan_pairs=" << (bp_scan_pairs_ns / 1'000'000)
+              << " markings=" << (bp_markings_ns / 1'000'000)
+              << " bitvec=" << (bp_bitvec_ns / 1'000'000)
+              << " blocks=" << (blocks_ns / 1'000'000)
+              << " hash_blocks=" << (b_hash_blocks_ns / 1'000'000)
+              << " scan_blocks=" << (b_scan_blocks_ns / 1'000'000)
+              << " update_blocks=" << (b_update_blocks_ns / 1'000'000)
+              << " generate_next=" << (generate_ns / 1'000'000);
+
+#  endif
+    TimePoint now = Clock::now();
 #endif
     prune(levels);
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     size_t prune_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
-
+#  ifdef BT_DBG
     std::cout << "prune: " << (prune_ns / 1'000'000) << "ms," << std::endl;
+#  elif defined BT_BENCH
+    std::cout << " prune=" << (prune_ns / 1'000'000);
+#  endif
 #endif
+
     make_tree(text, levels, padding);
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     size_t make_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
+#  ifdef BT_DBG
     std::cout << "make: " << (make_ns / 1'000'000) << "ms" << std::endl;
+#  elif defined BT_BENCH
+    std::cout << " make=" << (make_ns / 1'000'000);
+#  endif
 #endif
   }
 
@@ -412,17 +436,16 @@ private:
     return 1 + ((x - 1) / y);
   }
 
-  void print_aggregate(const char* name,
-                       const tlx::Aggregate<size_t>& agg,
-                       size_t div = 1) {
-    printf(
-        "%s -> min: %10u, max: %10u, avCriscog: %10.2f, dev: %10.2f, #: %10u\n",
-        name,
-        static_cast<unsigned int>(agg.min() / div),
-        static_cast<unsigned int>(agg.max() / div),
-        agg.avg() / static_cast<double>(div),
-        agg.standard_deviation(0) / static_cast<double>(div),
-        static_cast<unsigned int>(agg.count()));
+  [[maybe_unused]] void print_aggregate(const char* name,
+                                        const tlx::Aggregate<size_t>& agg,
+                                        size_t div = 1) {
+    printf("%s -> min: %10u, max: %10u, avg: %10.2f, dev: %10.2f, #: %10u\n",
+           name,
+           static_cast<unsigned int>(agg.min() / div),
+           static_cast<unsigned int>(agg.max() / div),
+           agg.avg() / static_cast<double>(div),
+           agg.standard_deviation(0) / static_cast<double>(div),
+           static_cast<unsigned int>(agg.count()));
   }
 
   /// @brief Scan through the blocks pairwise in order to identify which blocks
@@ -451,7 +474,7 @@ private:
     std::atomic_size_t threads_done = 0;
     std::atomic_bool last_done = false;
     auto& barrier = map.barrier();
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     TimePoint now = Clock::now();
     tlx::Aggregate<size_t> scan_hits;
     tlx::Aggregate<size_t> start_idle_ns;
@@ -459,7 +482,7 @@ private:
     tlx::Aggregate<size_t> total_idle_ns;
     tlx::Aggregate<size_t> handle_queue_ns;
 
-#  pragma omp parallel default(none) threads(threads)                          \
+#  pragma omp parallel default(none) num_threads(threads)                      \
       shared(level,                                                            \
                  map,                                                          \
                  text,                                                         \
@@ -527,7 +550,7 @@ private:
 #pragma omp barrier
       shard.handle_queue();
 #pragma omp single
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       {
         bp_hash_pairs_ns +=
             std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
@@ -551,7 +574,7 @@ private:
                                      map,
                                      block_size,
                                      i
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
                                      ,
                                      thread_scan_hits
 #endif
@@ -559,7 +582,7 @@ private:
         }
       }
 
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       auto& start_idle = shard.start_idle_ns();
       auto& finish_idle = shard.finish_idle_ns();
       auto& handle_queue = shard.handle_queue_ns();
@@ -574,8 +597,12 @@ private:
       };
 #endif
     }
+#ifdef BT_INSTRUMENT
+    bp_scan_pairs_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
 
-#ifdef BT_DBG
+#  ifdef BT_DBG
     tlx::Aggregate<size_t> map_loads;
 
     for (size_t load : map.map_loads()) {
@@ -587,11 +614,8 @@ private:
     print_aggregate("Pair Idle (ms)         ", total_idle_ns, 1'000'000);
     print_aggregate("Pair Handle Queue (ms) ", finish_idle_ns, 1'000'000);
 
-    bp_scan_pairs_ns +=
-        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
-            .count();
-
     BT_ASSERT(map.num_inserts_.load() == map.size());
+#  endif
 #endif
 
     level.is_internal = std::make_unique<BitVector>(level.num_blocks);
@@ -607,7 +631,7 @@ private:
   ///   block index.
   void fill_is_internal(BitVector& is_internal, BlockPairMap& map) {
     const size_type num_blocks = is_internal.size();
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     TimePoint now = Clock::now();
 #endif
     // Set up the packed array holding the markings for each block.
@@ -625,7 +649,7 @@ private:
             }
           }
         });
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     bp_markings_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
@@ -639,7 +663,7 @@ private:
       const bool block_is_internal = markings[i] != 0b11;
       is_internal[i] = block_is_internal;
     }
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     bp_bitvec_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
@@ -662,7 +686,7 @@ private:
                              BlockPairMap& map,
                              const size_t num_iterations,
                              const size_type current_block_index
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
                              ,
                              tlx::Aggregate<size_t>& agg
 #endif
@@ -673,7 +697,7 @@ private:
       // pairs.
       auto found = map.find(current_hash);
       if (found == map.end()) {
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
         agg.add(0);
         continue;
       } else {
@@ -719,7 +743,7 @@ private:
     // Whether the last thread is done
     std::atomic_bool last_done = false;
     auto& barrier = links.barrier();
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     TimePoint now = Clock::now();
     tlx::Aggregate<size_t> scan_hits;
     tlx::Aggregate<size_t> start_idle_ns;
@@ -783,7 +807,7 @@ private:
 #pragma omp barrier
       shard.handle_queue();
 #pragma omp single
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
 
       {
         b_hash_blocks_ns +=
@@ -813,14 +837,14 @@ private:
                                 links,
                                 level_data,
                                 i
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
                                 ,
                                 thread_scan_hits
 #endif
           );
         }
       }
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       auto& start_idle = shard.start_idle_ns();
       auto& finish_idle = shard.finish_idle_ns();
       auto& handle_queue = shard.handle_queue_ns();
@@ -835,12 +859,13 @@ private:
       };
 #endif
     }
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     b_scan_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
     now = Clock::now();
 
+#  ifdef BT_DBG
     tlx::Aggregate<size_t> map_loads;
 
     for (size_t load : links.map_loads()) {
@@ -853,6 +878,7 @@ private:
     print_aggregate("Block Handle Queue (ms)", finish_idle_ns, 1'000'000);
 
     BT_ASSERT(links.num_inserts_.load() == links.size());
+#  endif
 #endif
 
     // By this point, the map should contain the first occurrences of
@@ -876,7 +902,7 @@ private:
           }
         });
 
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     b_update_blocks_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
@@ -896,7 +922,7 @@ private:
                                     BlockMap& links,
                                     LevelData& level_data,
                                     const size_type current_block_index
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
                                     ,
                                     tlx::Aggregate<size_t>& hits
 #endif
@@ -907,13 +933,14 @@ private:
       // Find all blocks in the multimap that match our hash
       auto found = links.find(hash);
       if (found == links.end()) {
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
         hits.add(0.0);
         continue;
       } else {
         hits.add(100.0);
-#endif
+#else
         continue;
+#endif
       }
       BlockOccurrences& occurrences = found->second;
       occurrences.update(current_block_index, offset);

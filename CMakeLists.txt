@@ -35,57 +35,65 @@ option(PASTA_BLOCK_TREE_BUILD_TESTS
 option(PASTA_BLOCK_TREE_BUILD_EXAMPLES
         "Build blocktree's benchmarks." OFF)
 option(PASTA_BLOCK_TREE_DEBUG
-        "Add instrumentation, calculating time etc." ON)
+        "Print debug information" OFF)
+option(PASTA_BLOCK_TREE_BENCH
+        "Enable outputting benchmark information" OFF)
 
 include(ExternalProject)
 # Optional test
 if (PASTA_BLOCK_TREE_BUILD_TESTS)
-  include(FetchContent)
-  FetchContent_Declare(
+    include(FetchContent)
+    FetchContent_Declare(
             googletest
             GIT_REPOSITORY https://github.com/google/googletest.git
             GIT_TAG release-1.12.1
     )
-  set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
-  FetchContent_MakeAvailable(googletest)
-  enable_testing()
-  include(GoogleTest)
-  add_subdirectory(tests)
+    set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
+    FetchContent_MakeAvailable(googletest)
+    enable_testing()
+    include(GoogleTest)
+    add_subdirectory(tests)
 endif ()
 if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
-  add_executable(block_tree_construction
+    add_executable(block_tree_construction
             examples/block_tree_construction.cpp)
-  target_link_libraries(block_tree_construction
+    target_link_libraries(block_tree_construction
             pasta_block_tree)
 
-  add_executable(build_bt
+    add_executable(build_bt
             examples/build_bt.cpp)
-  target_link_libraries(build_bt
+    target_link_libraries(build_bt
             pasta_block_tree)
-  if (PASTA_BLOCK_TREE_DEBUG)
-    target_compile_definitions(build_bt PRIVATE BT_DBG)
-  endif ()
+    if (PASTA_BLOCK_TREE_DEBUG)
+        target_compile_definitions(build_bt PRIVATE BT_INSTRUMENT)
+        target_compile_definitions(build_bt PRIVATE BT_DBG)
+    endif ()
 
-  if (PASTA_BLOCK_TREE_MALLOC_COUNT)
-    message(DEBUG "malloc_count enabled")
-    # malloc_count
-    ExternalProject_Add(malloc_count
-            PREFIX ${CMAKE_CURRENT_BINARY_DIR}
-            GIT_REPOSITORY    git@github.com:Skadic/malloc_count.git
-            BUILD_COMMAND gcc -c -fpic -ldl ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count/malloc_count.c
-            CONFIGURE_COMMAND ""
-            INSTALL_COMMAND ""
-          )
+    if (PASTA_BLOCK_TREE_BENCH)
+        target_compile_definitions(build_bt PRIVATE BT_INSTRUMENT)
+        target_compile_definitions(build_bt PRIVATE BT_BENCH)
+    endif ()
 
-    add_library(libmalloc_count INTERFACE)
-    target_include_directories(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
-    target_link_libraries(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count-build/malloc_count.o)
+    if (PASTA_BLOCK_TREE_MALLOC_COUNT)
+        message(DEBUG "malloc_count enabled")
+        # malloc_count
+        ExternalProject_Add(malloc_count
+                PREFIX ${CMAKE_CURRENT_BINARY_DIR}
+                GIT_REPOSITORY git@github.com:Skadic/malloc_count.git
+                BUILD_COMMAND gcc -c -fpic -ldl ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count/malloc_count.c
+                CONFIGURE_COMMAND ""
+                INSTALL_COMMAND ""
+        )
 
-    target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/extlib/malloc_count)
-    target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
-    #target_link_libraries(build_bt libmalloc_count)
-    #target_compile_definitions(build_bt PRIVATE BT_MALLOC_COUNT)
-  endif()
+        add_library(libmalloc_count INTERFACE)
+        target_include_directories(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
+        target_link_libraries(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count-build/malloc_count.o)
+
+        target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/extlib/malloc_count)
+        target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
+        #target_link_libraries(build_bt libmalloc_count)
+        #target_compile_definitions(build_bt PRIVATE BT_MALLOC_COUNT)
+    endif ()
 
 endif ()
 
@@ -94,9 +102,12 @@ add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/robin-hood-hashing)
+set(SPDLOG_USE_STD_FORMAT ON CACHE BOOL "Use std format library for spdlog" FORCE)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/spdlog)
 
 set(BUILD_DIVSUFSORT64 ON CACHE BOOL "Build libdivsufsort in 64-bits mode")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/external/libdivsufsort)
+set_target_properties(spdlog PROPERTIES COMPILE_FLAGS "-w")
 
 add_library(waitfree-mpsc-queue
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/waitfree-mpsc-queue/mpsc.c)
@@ -120,7 +131,7 @@ add_library(sdsl ${sdsl_sources})
 target_include_directories(sdsl SYSTEM INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/include)
 target_include_directories(sdsl SYSTEM INTERFACE
-  ${CMAKE_CURRENT_BINARY_DIR}/extlib/sdsl-lite/external/libdivsufsort/include)
+        ${CMAKE_CURRENT_BINARY_DIR}/extlib/sdsl-lite/external/libdivsufsort/include)
 target_link_libraries(sdsl PUBLIC divsufsort64)
 set_target_properties(sdsl PROPERTIES COMPILE_FLAGS "-w")
 
@@ -131,6 +142,7 @@ target_link_libraries(pasta_block_tree INTERFACE
         robin_hood
         waitfree-mpsc-queue
         sdsl
+        spdlog
         #jiffy
         jiffy1)
 target_include_directories(pasta_block_tree INTERFACE

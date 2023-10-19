@@ -62,7 +62,7 @@
     {
       "name": "bench",
       "displayName": "Behcnmarking Configuration",
-      "description": "Release build with malloc_count",
+      "description": "Release build with extended debug information",
       "generator": "Ninja",
       "binaryDir": "${sourceDir}/build_bench",
       "inherits": "default",
@@ -70,7 +70,7 @@
         "PASTA_BLOCK_TREE_BUILD_EXAMPLES": "ON",
         "CMAKE_CXX_FLAGS": "-fopenmp -Wall -Wextra -pedantic -Werror -march=native -fdiagnostics-color=always -g -O3 -ldl",
         "CMAKE_BUILD_TYPE": "Release",
-        "PASTA_BLOCK_TREE_MALLOC_COUNT": "ON"
+        "PASTA_BLOCK_TREE_BENCH": "ON"
       }
     }
   ],

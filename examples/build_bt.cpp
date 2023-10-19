@@ -18,13 +18,17 @@
  *
  ******************************************************************************/
 
+#include "spdlog/sinks/basic_file_sink.h"
+#include "spdlog/sinks/stdout_color_sinks.h"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <pasta/block_tree/block_tree.hpp>
+#include <spdlog/spdlog.h>
 
-#define LPF
+#define PAR_SHARDED_SYNC
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -118,7 +122,7 @@ make_bt(std::vector<uint8_t>& text,
 #endif
 
 #ifdef BT_MALLOC_COUNT
-#include <malloc_count.h>
+#  include <malloc_count.h>
 #endif
 #include <sstream>
 #include <string>
@@ -183,18 +187,17 @@ int main(int argc, char** argv) {
     text = std::vector<uint8_t>(input.begin(), input.end());
   }
 
+  std::cout << "RESULT algo=" << ALGO_NAME
+            << " file=" << std::filesystem::path(argv[1]).filename().string()
+            << " threads=" << threads << " arity=" << arity
+            << " leaf_length=" << leaf_length;
   TimePoint now = Clock::now();
   auto bt = make_bt(text, arity, leaf_length, threads);
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
           .count();
 
-  std::cout << "RESULT algo=" << ALGO_NAME
-            << " file=" << std::filesystem::path(argv[1]).filename().string()
-            << " arity=" << arity << " leaf_length=" << leaf_length
-            << " time=" << elapsed << " threads=" << threads
-            << " space=" << bt->print_space_usage();
-
+  std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
 
 #ifdef BT_MALLOC_COUNT
   std::cout << " memory=" << malloc_count_peak();

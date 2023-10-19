@@ -175,7 +175,7 @@ public:
     SeqHashMap& map_;
     Queue& task_queue_;
     std::atomic_size_t& task_count_;
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     tlx::Aggregate<size_t> start_idle_ns_;
     tlx::Aggregate<size_t> handle_queue_ns_;
     tlx::Aggregate<size_t> finish_idle_ns_;
@@ -188,7 +188,7 @@ public:
           map_(sharded_map_.map_[thread_id]),
           task_queue_(sharded_map_.task_queue_[thread_id]),
           task_count_(sharded_map.task_count_[thread_id])
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
           ,
           start_idle_ns_(),
           handle_queue_ns_(),
@@ -207,14 +207,14 @@ public:
         K key = k;
         V initial = UpdateFn::init(key, std::move(in_value));
         map_.emplace(key, std::move(initial));
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
         sharded_map_.num_inserts_.fetch_add(1, mem::acq_rel);
 #endif
       } else {
         // Otherwise, update it.
         V& val = res->second;
         UpdateFn::update(k, val, std::move(in_value));
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
         sharded_map_.num_updates_.fetch_add(1, mem::acq_rel);
 #endif
       }
@@ -226,11 +226,11 @@ public:
         // when trying to insert
         sharded_map_.threads_handling_queue_.fetch_add(1, mem::acq_rel);
       }
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       auto now = std::chrono::high_resolution_clock::now();
 #endif
       sharded_map_.barrier_.arrive_and_wait();
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       size_t ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
                             std::chrono::high_resolution_clock::now() - now)
                             .count();
@@ -239,7 +239,7 @@ public:
       now = std::chrono::high_resolution_clock::now();
 #endif
       handle_queue();
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
                      std::chrono::high_resolution_clock::now() - now)
                      .count();
@@ -248,7 +248,7 @@ public:
       now = std::chrono::high_resolution_clock::now();
 #endif
       sharded_map_.barrier_.arrive_and_wait();
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
       ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
                      std::chrono::high_resolution_clock::now() - now)
                      .count();
@@ -335,7 +335,7 @@ public:
       insert(StoredValue(key, value));
     }
 
-#ifdef BT_DBG
+#ifdef BT_INSTRUMENT
     [[nodiscard]] const tlx::Aggregate<size_t>& start_idle_ns() const {
       return start_idle_ns_;
     }
@@ -412,13 +412,13 @@ public:
     return it;
   }
 
-  void print_map_loads() {
+  [[maybe_unused]] void print_map_loads() {
     for (size_t i = 0; i < map_.size(); ++i) {
       std::cout << "Map " << i << " load: " << map_[i].size() << std::endl;
     }
   }
 
-  void print_queue_loads() {
+  [[maybe_unused]] void print_queue_loads() {
     auto so = std::osyncstream(std::cout);
 
     for (size_t i = 0; i < map_.size(); ++i) {
@@ -437,7 +437,7 @@ public:
     return loads;
   }
 
-  void print_ins_upd() {
+  [[maybe_unused]] void print_ins_upd() {
     std::osyncstream(std::cout)
         << "Inserts: " << num_inserts_.load()
         << "\nUpdates: " << num_updates_.load() << std::endl;
