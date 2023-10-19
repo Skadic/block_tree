@@ -18,15 +18,11 @@
  *
  ******************************************************************************/
 
-#include "spdlog/sinks/basic_file_sink.h"
-#include "spdlog/sinks/stdout_color_sinks.h"
-
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <pasta/block_tree/block_tree.hpp>
-#include <spdlog/spdlog.h>
 
 #define PAR_SHARDED_SYNC
 #ifdef FP
