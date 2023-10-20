@@ -304,7 +304,9 @@ private:
 
   /// @brief Constructs the block tree.
   /// @param text The input text.
-  void construct(const std::vector<input_type>& text, const size_t threads) {
+  void construct(const std::vector<input_type>& text,
+                 const size_t threads,
+                 const size_t queue_size) {
     const size_type text_len = text.size();
     /// The number of characters a block tree with s top-level blocks and arity
     /// of strictly tau would exceed over the text size
@@ -339,6 +341,10 @@ private:
     std::cout << "using " << threads << " threads" << std::endl;
 #endif
 
+#ifdef BT_BENCH
+    std::cout << " queue_capacity=" << queue_size;
+#endif
+
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
 #ifdef BT_DBG
@@ -350,14 +356,14 @@ private:
       TimePoint now = Clock::now();
 #endif
       LevelData& current = levels.back();
-      scan_block_pairs(text, current, is_padded, threads);
+      scan_block_pairs(text, current, is_padded, threads, queue_size);
 #ifdef BT_INSTRUMENT
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
       now = Clock::now();
 #endif
-      scan_blocks(text, current, is_padded, threads);
+      scan_blocks(text, current, is_padded, threads, queue_size);
 #ifdef BT_INSTRUMENT
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
@@ -460,7 +466,8 @@ private:
   void scan_block_pairs(const std::vector<input_type>& text,
                         LevelData& level,
                         const bool is_padded,
-                        const size_t threads) {
+                        const size_t threads,
+                        const size_t queue_size) {
     if (level.num_blocks < 4) {
       level.is_internal = std::make_unique<BitVector>(level.num_blocks, true);
       level.is_internal_rank = std::make_unique<Rank>(*level.is_internal);
@@ -469,7 +476,7 @@ private:
 
     // A map containing hashed block pairs mapped to their indices of the
     // pairs' first block respectively
-    BlockPairMap map(threads, BT_QUEUE_CAPACITY);
+    BlockPairMap map(threads, queue_size);
 
     std::atomic_size_t threads_done = 0;
     std::atomic_bool last_done = false;
@@ -519,14 +526,15 @@ private:
       const auto end =
           std::min<size_t>(num_block_pairs, (thread_id + 1) * segment_size);
 
+      RabinKarp rk(text, SIGMA, block_starts[0], pair_size, PRIME);
       for (size_t i = start; i < end; ++i) {
         // If the next block is not adjacent, we cannot hash the pair
         // starting at the current block
         if (!level.next_is_adjacent(i)) {
           continue;
         }
+        rk.restart(block_starts[i]);
         // Move the hasher to the current block pair
-        RabinKarp rk(text, SIGMA, block_starts[i], pair_size, PRIME);
         RabinKarpHash hash = rk.current_hash();
         // Try to find the hash in the map, insert a new entry if it
         // doesn't exist, and add the current block to the entry
@@ -547,8 +555,8 @@ private:
       }
       barrier.arrive_and_drop();
 
-#pragma omp barrier
       shard.handle_queue();
+#pragma omp barrier
 #pragma omp single
 #ifdef BT_INSTRUMENT
       {
@@ -563,12 +571,14 @@ private:
       {
       }
 #endif
-
       if (start < static_cast<size_t>(num_block_pairs)) {
         RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
         for (size_t i = start; i < end; ++i) {
           if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
             continue;
+          }
+          if (block_starts[i] != static_cast<size_type>(rk.init_)) {
+            rk.restart(block_starts[i]);
           }
           scan_windows_in_block_pair(rk,
                                      map,
@@ -721,7 +731,8 @@ private:
   void scan_blocks(const std::vector<input_type>& text,
                    LevelData& level_data,
                    const bool is_padded,
-                   const size_t threads) {
+                   const size_t threads,
+                   const size_t queue_size) {
     const size_t num_blocks = level_data.num_blocks;
 
     level_data.pointers =
@@ -736,7 +747,7 @@ private:
     }
 
     // A map hashing blocks and saving where they occur.
-    BlockMap links(threads, BT_QUEUE_CAPACITY);
+    BlockMap links(threads, queue_size);
 
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_done = 0;
@@ -785,9 +796,10 @@ private:
       const size_t end = std::min<size_t>(num_total_iterations,
                                           (thread_id + 1) * segment_size);
 
+      RabinKarp rk(text, SIGMA, block_starts[0], block_size, PRIME);
       // Hash each block and store their hashes in the map
       for (size_t i = start; i < end; ++i) {
-        const RabinKarp rk(text, SIGMA, block_starts[i], block_size, PRIME);
+        rk.restart(block_starts[i]);
         RabinKarpHash hash = rk.current_hash();
         shard.insert(hash, {i, 0});
       }
@@ -804,8 +816,8 @@ private:
         shard.handle_queue_sync(false);
       }
       barrier.arrive_and_drop();
-#pragma omp barrier
       shard.handle_queue();
+#pragma omp barrier
 #pragma omp single
 #ifdef BT_INSTRUMENT
 
@@ -1289,7 +1301,8 @@ public:
                             const size_t arity,
                             const size_t root_arity,
                             const size_t max_leaf_length,
-                            const size_t threads) {
+                            const size_t threads,
+                            const size_t queue_size) {
     const auto old = omp_get_max_threads();
     const auto old_dynamic = omp_get_dynamic();
     omp_set_dynamic(0);
@@ -1298,7 +1311,7 @@ public:
     this->s_ = root_arity;
     this->max_leaf_length_ = max_leaf_length;
     this->map_unique_chars(text);
-    construct(text, threads);
+    construct(text, threads, queue_size);
     omp_set_dynamic(old_dynamic);
     omp_set_num_threads(old);
   }

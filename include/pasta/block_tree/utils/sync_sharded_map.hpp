@@ -21,7 +21,6 @@
 
 #include <barrier>
 #include <concepts>
-#include <condition_variable>
 #include <cstddef>
 #include <omp.h>
 #include <pasta/block_tree/utils/concepts.hpp>
@@ -115,8 +114,15 @@ class SyncShardedMap {
   ///   queues.
   std::atomic_size_t threads_handling_queue_;
 
+#ifdef BT_INSTRUMENT
+  std::atomic_size_t num_cycles_;
+  std::function<void()> FN = [this]() noexcept {
+    this->num_cycles_.fetch_add(1, mem::acq_rel);
+  };
+#else
   constexpr static std::invocable auto FN = []() noexcept {
   };
+#endif
 
   std::barrier<decltype(FN)> barrier_;
 
@@ -147,7 +153,7 @@ public:
         task_queue_(),
         task_count_(),
         threads_handling_queue_(0),
-        barrier_(thread_count, FN),
+        barrier_(static_cast<ptrdiff_t>(thread_count), FN),
         num_updates_(0),
         num_inserts_(0) {
     map_.reserve(thread_count);
@@ -247,6 +253,9 @@ public:
 
       now = std::chrono::high_resolution_clock::now();
 #endif
+      if (make_others_wait) {
+        sharded_map_.threads_handling_queue_.fetch_sub(1, mem::acq_rel);
+      }
       sharded_map_.barrier_.arrive_and_wait();
 #ifdef BT_INSTRUMENT
       ns_count = std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -254,9 +263,6 @@ public:
                      .count();
       finish_idle_ns_.add(ns_count);
 #endif
-      if (make_others_wait) {
-        sharded_map_.threads_handling_queue_.fetch_sub(1, mem::acq_rel);
-      }
     }
 
     /// @brief Handles this thread's queue, inserting or updating all values in
@@ -293,11 +299,11 @@ public:
       }
       const size_t hash = Hasher{}(pair.first);
       const size_t target_thread_id = sharded_map_.mix_select(hash);
-      if (target_thread_id == thread_id_) {
-        // If the target thread is this thread, insert the value directly
-        insert_or_update_direct(pair.first, std::move(pair.second));
-        return;
-      }
+      // if (target_thread_id == thread_id_) {
+      //   // If the target thread is this thread, insert the value directly
+      //   insert_or_update_direct(pair.first, std::move(pair.second));
+      //   return;
+      // }
 
       // Otherwise enqueue the new value in the target thread
       std::atomic_size_t& target_task_count =
@@ -350,6 +356,12 @@ public:
 #endif
   };
 
+#ifdef BT_INSTRUMENT
+  [[nodiscard]] size_t num_cycles() const {
+    return num_cycles_.load(mem::acquire);
+  }
+#endif
+
   Shard get_shard(const size_t thread_id) {
     return Shard(*this, thread_id);
   }
@@ -367,7 +379,7 @@ public:
     return size;
   }
 
-  Whereabouts where(const K& k) {
+  [[maybe_unused]] Whereabouts where(const K& k) {
     const size_t hash = Hasher{}(k);
     const size_t target_thread_id = mix_select(hash);
     SeqHashMap& map = map_[target_thread_id];

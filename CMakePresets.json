@@ -68,8 +68,8 @@
       "inherits": "default",
       "cacheVariables": {
         "PASTA_BLOCK_TREE_BUILD_EXAMPLES": "ON",
-        "CMAKE_CXX_FLAGS": "-fopenmp -Wall -Wextra -pedantic -Werror -march=native -fdiagnostics-color=always -g -O3 -ldl",
-        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CXX_FLAGS": "-fopenmp -Wall -Wextra -pedantic -Werror -march=native -fdiagnostics-color=always -g -O3 -lprofiler",
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
         "PASTA_BLOCK_TREE_BENCH": "ON"
       }
     }

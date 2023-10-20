@@ -124,10 +124,10 @@ target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
 file(GLOB sdsl_sources ${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/lib/*.cpp)
-add_library(sdsl ${sdsl_sources})
+add_library(sdsl STATIC ${sdsl_sources})
 target_include_directories(sdsl SYSTEM PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/include)
-      target_include_directories(sdsl SYSTEM PUBLIC
+target_include_directories(sdsl SYSTEM PUBLIC
         ${CMAKE_CURRENT_BINARY_DIR}/extlib/sdsl-lite/external/libdivsufsort/include)
 target_link_libraries(sdsl PUBLIC divsufsort64)
 set_target_properties(sdsl PROPERTIES COMPILE_FLAGS "-w")

@@ -31,6 +31,7 @@ std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
+        const size_t,
         const size_t) {
   ;
   return std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>(
@@ -43,6 +44,7 @@ std::unique_ptr<pasta::BlockTreeFP2<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
+        const size_t,
         const size_t) {
   ;
   return std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(text,
@@ -57,7 +59,8 @@ std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
-        const size_t threads) {
+        const size_t threads,
+        const size_t) {
   ;
   return std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>>(
       pasta::make_block_tree_lpf_parallel<uint8_t, int32_t>(text,
@@ -73,7 +76,8 @@ std::unique_ptr<pasta::BlockTreeFPParSharded<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
-        const size_t threads) {
+        const size_t threads,
+        const size_t) {
   ;
   return std::make_unique<pasta::BlockTreeFPParSharded<uint8_t, int32_t>>(
       text,
@@ -89,14 +93,16 @@ std::unique_ptr<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
-        const size_t threads) {
+        const size_t threads,
+        const size_t queue_size) {
   ;
   return std::make_unique<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>(
       text,
       arity,
       1,
       leaf_length,
-      threads);
+      threads,
+      queue_size);
 }
 #  define ALGO_NAME "shard_sync"
 #elif defined PAR_PHMAP
@@ -162,6 +168,14 @@ int main(int argc, char** argv) {
 
   const size_t threads = atoi(argv[4]);
 
+#ifdef PAR_SHARDED_SYNC
+  if (argc < 6) {
+    std::cerr << "Please input queue size" << std::endl;
+    exit(1);
+  }
+  const size_t queue_size = atoi(argv[5]);
+#endif
+
   std::stringstream ss;
   ss << argv[1] << "_arit" << arity << "_leaf" << leaf_length << "_new.bt";
   std::string out_path = ss.str();
@@ -188,7 +202,7 @@ int main(int argc, char** argv) {
             << " threads=" << threads << " arity=" << arity
             << " leaf_length=" << leaf_length;
   TimePoint now = Clock::now();
-  auto bt = make_bt(text, arity, leaf_length, threads);
+  auto bt = make_bt(text, arity, leaf_length, threads, queue_size);
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
           .count();
