@@ -114,6 +114,8 @@ class SyncShardedMap {
   ///   queues.
   std::atomic_size_t threads_handling_queue_;
 
+  const size_t queue_capacity_;
+
 #ifdef BT_INSTRUMENT
   std::atomic_size_t num_cycles_;
   std::function<void()> FN = [this]() noexcept {
@@ -153,6 +155,7 @@ public:
         task_queue_(),
         task_count_(),
         threads_handling_queue_(0),
+        queue_capacity_(queue_capacity),
         barrier_(static_cast<ptrdiff_t>(thread_count), FN),
         num_updates_(0),
         num_inserts_(0) {
@@ -270,8 +273,9 @@ public:
     ///     done with their handle_queue call.
     void handle_queue() {
       const size_t num_tasks_raw = task_count_.exchange(0, mem::acq_rel);
-      BT_ASSERT(num_tasks_raw <= task_queue_.size());
-      const size_t num_tasks = std::min(num_tasks_raw, task_queue_.size());
+      BT_ASSERT(num_tasks_raw <= sharded_map_.queue_capacity_);
+      const size_t num_tasks =
+          std::min(num_tasks_raw, sharded_map_.queue_capacity_);
       if (num_tasks == 0) {
         return;
       }
@@ -312,18 +316,15 @@ public:
       size_t task_idx = target_task_count.fetch_add(1, mem::acq_rel);
       // If the target queue is full, signal to the other threads, that they
       // need to handle their queue and handle this thread's queue
-      if (task_idx >= sharded_map_.task_queue_[target_thread_id].size()) {
+      if (task_idx >= sharded_map_.queue_capacity_) {
         //  Since we incremented that thread's task count, but didn't insert
         //  anything, we need to decrement it again so that it has the correct
         //  value
         target_task_count.fetch_sub(1, mem::acq_rel);
         handle_queue_sync();
         // Since the queue was handled, the task count is now 0
-        // task_idx = target_task_count.fetch_add(1, mem::seq_cst);
-        insert(std::move(pair));
-        return;
+        task_idx = target_task_count.fetch_add(1, mem::acq_rel);
       }
-      BT_ASSERT(task_idx < task_queue_.size());
       // Insert the value into the queue
       sharded_map_.task_queue_[target_thread_id][task_idx] = std::move(pair);
     }
