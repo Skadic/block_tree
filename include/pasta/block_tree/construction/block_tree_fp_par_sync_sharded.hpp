@@ -36,8 +36,6 @@
 #include <sdsl/util.hpp>
 #include <tlx/math/aggregate.hpp>
 
-#define BT_QUEUE_CAPACITY 163840
-
 __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
@@ -307,6 +305,9 @@ private:
   void construct(const std::vector<input_type>& text,
                  const size_t threads,
                  const size_t queue_size) {
+#ifdef BT_INSTRUMENT
+    TimePoint now = Clock::now();
+#endif
     const size_type text_len = text.size();
     /// The number of characters a block tree with s top-level blocks and arity
     /// of strictly tau would exceed over the text size
@@ -333,6 +334,15 @@ private:
     top_level.num_blocks = top_level.block_starts->size();
 
 #ifdef BT_INSTRUMENT
+
+    const size_t setup_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+
+#  ifdef BT_BENCH
+    std::cout << " setup=" << setup_ns;
+#  endif
+
     size_t pairs_ns = 0;
     size_t blocks_ns = 0;
     size_t generate_ns = 0;
@@ -407,7 +417,7 @@ private:
               << " generate_next=" << (generate_ns / 1'000'000);
 
 #  endif
-    TimePoint now = Clock::now();
+    now = Clock::now();
 #endif
     prune(levels);
 #ifdef BT_INSTRUMENT
