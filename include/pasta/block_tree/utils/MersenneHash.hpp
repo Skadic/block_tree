@@ -64,7 +64,7 @@ public:
     const std::vector<T>& text = *text_;
     const std::vector<T>& other_text = *other.text_;
 
-#define MH_PACKED_LOOP_UNROLL
+#define MH_MEMCMP
 #ifdef MH_LOOP
     for (uint64_t i = 0; i < length_; i++) {
       if (text[start_ + i] != other_text[other.start_ + i]) {

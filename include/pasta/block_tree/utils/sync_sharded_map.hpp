@@ -318,9 +318,10 @@ public:
         target_task_count.fetch_sub(1, mem::acq_rel);
         handle_queue_sync();
         // Since the queue was handled, the task count is now 0
-        task_idx = target_task_count.fetch_add(1, mem::acq_rel);
         // TODO It might be worth considering the recursive call again
         //  It might be the cause of some segfaults
+        insert(std::move(pair));
+        return;
       }
       // Insert the value into the queue
       sharded_map_.task_queue_[target_thread_id][task_idx] = std::move(pair);
