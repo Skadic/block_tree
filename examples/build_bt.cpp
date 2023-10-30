@@ -24,7 +24,7 @@
 #include <iostream>
 #include <pasta/block_tree/block_tree.hpp>
 
-#define PAR_SHARDED_SYNC
+#define PAR_PARLAY
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -89,14 +89,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "shard"
 #elif defined PAR_SHARDED_SYNC
 #  include <pasta/block_tree/construction/block_tree_fp_par_sync_sharded.hpp>
-std::unique_ptr<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
   ;
-  return std::make_unique<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>(
+  return std::make_unique<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>(
       text,
       arity,
       1,
@@ -121,6 +121,38 @@ make_bt(std::vector<uint8_t>& text,
       threads);
 }
 #  define ALGO_NAME "par_map"
+#elif defined PAR_PARLAY
+#  include <pasta/block_tree/construction/block_tree_fp_par_parlay.hpp>
+std::unique_ptr<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads) {
+  ;
+  return std::make_unique<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads);
+}
+#  define ALGO_NAME "par_parlay"
+#elif defined PAR_PHF
+#  include <pasta/block_tree/construction/block_tree_fp_par_phf.hpp>
+std::unique_ptr<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads) {
+  ;
+  return std::make_unique<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads);
+}
+#  define ALGO_NAME "par_phf"
 #endif
 
 #ifdef BT_MALLOC_COUNT
@@ -202,7 +234,15 @@ int main(int argc, char** argv) {
             << " threads=" << threads << " arity=" << arity
             << " leaf_length=" << leaf_length;
   TimePoint now = Clock::now();
-  auto bt = make_bt(text, arity, leaf_length, threads, queue_size);
+  auto bt = make_bt(text,
+                    arity,
+                    leaf_length,
+                    threads
+#ifdef PAR_SHARDED_SYNC
+                    ,
+                    queue_size
+#endif
+  );
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
           .count();

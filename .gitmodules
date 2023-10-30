@@ -32,3 +32,12 @@
 [submodule "extlib/sdsl-lite"]
 	path = extlib/sdsl-lite
 	url = https://github.com/Skadic/sdsl-lite
+[submodule "extlib/--force"]
+	path = extlib/--force
+	url = https://github.com/rizkg/BBHash
+[submodule "extlib/BBHash"]
+	path = extlib/BBHash
+	url = https://github.com/rizkg/BBHash
+[submodule "extlib/parlayhash"]
+	path = extlib/parlayhash
+	url = https://github.com/cmuparlay/parlayhash

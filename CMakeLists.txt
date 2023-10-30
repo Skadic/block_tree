@@ -145,5 +145,7 @@ target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/growt)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/parallel-hashmap/parallel_hashmap)
+target_include_directories(pasta_block_tree SYSTEM INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/parlayhash/include)
 
 ################################################################################
