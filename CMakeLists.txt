@@ -111,13 +111,17 @@ add_library(waitfree-mpsc-queue
 target_include_directories(waitfree-mpsc-queue PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/waitfree-mpsc-queue)
 
-
 add_library(jiffy INTERFACE)
 target_include_directories(jiffy INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/Jiffy)
 add_library(jiffy1 INTERFACE)
 target_include_directories(jiffy1 INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/Jiffy-1)
+
+add_library(bbhash STATIC ${CMAKE_CURRENT_SOURCE_DIR}/extlib/BBHash/example.cpp)
+target_include_directories(bbhash SYSTEM PUBLIC
+        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/BBHash)
+set_target_properties(bbhash PROPERTIES COMPILE_FLAGS "-w")
 
 add_library(pasta_block_tree INTERFACE)
 target_include_directories(pasta_block_tree INTERFACE
@@ -140,6 +144,7 @@ target_link_libraries(pasta_block_tree INTERFACE
         waitfree-mpsc-queue
         sdsl
         #jiffy
+        bbhash
         jiffy1)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/growt)

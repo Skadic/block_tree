@@ -69,7 +69,7 @@
       "cacheVariables": {
         "PASTA_BLOCK_TREE_BUILD_EXAMPLES": "ON",
         "CMAKE_CXX_FLAGS": "-fopenmp -Wall -Wextra -pedantic -Werror -march=native -fdiagnostics-color=always -g -O3 -lprofiler",
-        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "CMAKE_BUILD_TYPE": "Release",
         "PASTA_BLOCK_TREE_BENCH": "ON"
       }
     }

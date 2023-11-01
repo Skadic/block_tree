@@ -566,7 +566,7 @@ private:
     // describing a link between a (potential) back block to their source block.
     // In addition to the vector, there is a boolean which denotes whether a
     // hash has already been processed
-    RabinKarpMap<BlockOccurrences> links(num_blocks);
+    RabinKarpMap<BlockOccurrences> links(std::max<size_t>(num_blocks / 20, 4));
 
 #ifdef BT_DBG
     TimePoint now = Clock::now();
