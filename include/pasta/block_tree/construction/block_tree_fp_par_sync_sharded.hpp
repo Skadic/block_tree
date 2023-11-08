@@ -60,7 +60,9 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
   constexpr static size_type SIGMA = 256;
 
   /// @brief The exponent of the mersenne prime used for the Rabin-Karp hasher
-  constexpr static uint8_t PRIME_EXPONENT = 107;
+  //constexpr static uint8_t PRIME_EXPONENT = 107;
+  constexpr static uint8_t PRIME_EXPONENT = 89;
+  //constexpr static uint8_t PRIME_EXPONENT = 61;
   /// @brief A mersenne prime used for the Rabin-Karp hasher
   constexpr static uint128_t PRIME = pasta::primer<PRIME_EXPONENT>();
 
@@ -73,6 +75,7 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
   template <typename key_type, typename value_type>
   using SeqHashMap =
       robin_hood::unordered_map<key_type, value_type, std::hash<key_type>>;
+      //std::unordered_map<key_type, value_type, std::hash<key_type>>;
 
   /// @brief A rabin karp hasher preconfigured for the current template
   ///   parameters

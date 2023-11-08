@@ -258,7 +258,7 @@ int main(int argc, char** argv) {
 
   std::cout << std::endl;
 
-  #ifdef BT_INSTRUMENT
+#ifdef BT_INSTRUMENT
   std::cout << "comparisons: " << mersenne_hash_comparisons
             << ", equals: " << mersenne_hash_equals
             << ", collisions: " << mersenne_hash_collisions
@@ -267,7 +267,7 @@ int main(int argc, char** argv) {
             << ", percent collisions: "
             << mersenne_hash_collisions / ((double)mersenne_hash_comparisons)
             << std::endl;
-  #endif
+#endif
 
   // std::ofstream ot(out_path);
   //  bt->serialize(ot);
