@@ -21,24 +21,35 @@
 
 #pragma once
 
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <functional>
 #include <iostream>
+#include <syncstream>
 #include <type_traits>
 #include <vector>
+#include <emmintrin.h>
 
 namespace pasta {
+
+#ifdef BT_INSTRUMENT
+static std::atomic_size_t mersenne_hash_comparisons = 0;
+static std::atomic_size_t mersenne_hash_equals = 0;
+static std::atomic_size_t mersenne_hash_collisions = 0;
+#endif
 
 template <typename T>
 class MersenneHash {
 public:
+  __extension__ typedef unsigned __int128 uint128_t;
   const std::vector<T>* text_;
-  uint64_t hash_;
+  uint128_t hash_;
   uint32_t start_;
   uint32_t length_;
   MersenneHash(std::vector<T> const& text,
-               size_t hash,
+               uint128_t hash,
                uint64_t start,
                uint64_t length)
       : text_(&text),
@@ -55,16 +66,21 @@ public:
   MersenneHash<T>& operator=(MersenneHash<T>&& other) = default;
 
   bool operator==(const MersenneHash& other) const {
-    //            std::cout << start_ << " " << other.start_ << std::endl;
+#ifdef BT_INSTRUMENT
+    mersenne_hash_comparisons++;
+#endif
     // if (length_ != other.length_)
     // return false;
     if (hash_ != other.hash_)
       return false;
 
+#define MH_MEMCMP
+
+#ifndef MH_NOCMP
     const std::vector<T>& text = *text_;
     const std::vector<T>& other_text = *other.text_;
+#endif
 
-#define MH_MEMCMP
 #ifdef MH_LOOP
     for (uint64_t i = 0; i < length_; i++) {
       if (text[start_ + i] != other_text[other.start_ + i]) {
@@ -138,9 +154,65 @@ public:
                   length_ - num_blocks * 32) == 0;
 
 #elif defined MH_MEMCMP
-    return memcmp(text.data() + start_,
-                  other_text.data() + other.start_,
-                  length_) == 0;
+    const bool b = memcmp(text.data() + start_,
+                          other_text.data() + other.start_,
+                          length_) == 0;
+
+#  ifdef BT_INSTRUMENT
+    if (!b) {
+      mersenne_hash_collisions++;
+    } else {
+      mersenne_hash_equals++;
+    }
+#  endif
+    return b;
+
+#elif defined MH_SPARSECMP
+    // Just compare as much data as fits into a word, choosing the largest
+    // integer type that fits into the length of this window
+    static constexpr size_t bytes_per_t = sizeof(T);
+    const T* text_ptr = text.data() + start_;
+    const T* other_text_ptr = other_text.data() + other.start_;
+    bool b;
+    switch (length_ * bytes_per_t) {
+      case 1:
+        b = text[0] == other_text[0];
+        break;
+      case 2:
+      case 3: {
+        const uint16_t* ptr = reinterpret_cast<const uint16_t*>(text_ptr);
+        const uint16_t* other_ptr =
+            reinterpret_cast<const uint16_t*>(other_text_ptr);
+        b = *ptr == *other_ptr;
+        break;
+      }
+      case 4:
+      case 5:
+      case 6:
+      case 7: {
+        const uint32_t* ptr = reinterpret_cast<const uint32_t*>(text_ptr);
+        const uint32_t* other_ptr =
+            reinterpret_cast<const uint32_t*>(other_text_ptr);
+        b = *ptr == *other_ptr;
+        break;
+      }
+      default: {
+        const uint64_t* ptr = reinterpret_cast<const uint64_t*>(text_ptr);
+        const uint64_t* other_ptr =
+            reinterpret_cast<const uint64_t*>(other_text_ptr);
+        b = *ptr == *other_ptr;
+      }
+    }
+#  ifdef BT_INSTRUMENT
+    if (!b) {
+      mersenne_hash_collisions++;
+    } else {
+      mersenne_hash_equals++;
+    }
+#  endif
+    return b;
+#elif defined MH_NOCMP
+    return true;
 #endif
   }
 };
@@ -150,7 +222,8 @@ public:
 namespace std {
 template <typename T>
 struct hash<pasta::MersenneHash<T>> {
-  std::size_t operator()(const pasta::MersenneHash<T>& hS) const {
+  pasta::MersenneHash<T>::uint128_t
+  operator()(const pasta::MersenneHash<T>& hS) const {
     return hS.hash_;
   }
 };

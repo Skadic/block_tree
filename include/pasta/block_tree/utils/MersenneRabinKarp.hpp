@@ -27,6 +27,17 @@
 
 namespace pasta {
 
+__extension__ typedef unsigned __int128 uint128_t;
+
+template <uint8_t exponent>
+static constexpr uint128_t primer() {
+  uint128_t res = 1;
+  for (size_t i = 0; i < exponent; i++) {
+    res <<= 1;
+  }
+  return res - 1;
+}
+
 ///
 /// @brief A Rabin-Karp rolling hasher.
 ///
@@ -39,8 +50,6 @@ namespace pasta {
 ///
 template <class T, class size_type, uint8_t mersenne_exponent = 0>
 class MersenneRabinKarp {
-  __extension__ typedef unsigned __int128 uint128_t;
-
 public:
   /// The text being hashed
   std::vector<T> const& text_;
@@ -52,7 +61,7 @@ public:
   /// A large prime used for modulus operations
   uint128_t prime_;
   /// The current hash value
-  uint64_t hash_;
+  uint128_t hash_;
   uint128_t max_sigma_;
 
   /// @brief Construct a new Rabin Karp hasher.
@@ -82,8 +91,8 @@ public:
     for (uint64_t i = 0; i < length_ - 1; i++) {
       sigma_c = mersenneModulo(sigma_c * sigma_);
     }
-    hash_ = (uint64_t)(fp);
-    max_sigma_ = (uint64_t)(sigma_c);
+    hash_ = fp;
+    max_sigma_ = sigma_c;
   };
 
   /// @brief Moves the hasher to the specified start index in the backing
@@ -98,16 +107,17 @@ public:
       fp = fp * sigma_;
       fp = mersenneModulo(fp + text_[i]);
     }
-    hash_ = (uint64_t)(fp);
+    hash_ = fp;
   };
 
   inline uint128_t mersenneModulo(uint128_t k) {
     if constexpr (mersenne_exponent == 0) {
       return k % prime_;
     } else {
-      constexpr static uint128_t MERSENNE = (1ULL << mersenne_exponent) - 1;
+      constexpr static uint128_t MERSENNE = primer<mersenne_exponent>();
       uint128_t i = (k & MERSENNE) + (k >> mersenne_exponent);
-      return (i >= MERSENNE) ? i - MERSENNE : i;
+      i -= (i >= MERSENNE) * MERSENNE;
+      return i;
     }
   };
 
@@ -131,13 +141,13 @@ public:
     if constexpr (mersenne_exponent == 0) {
       fp += prime_ * (out_char_influence > hash_) - out_char_influence;
     } else {
-      fp += ((1ULL << mersenne_exponent) - 1) * (out_char_influence > hash_) -
+      fp += primer<mersenne_exponent>() * (out_char_influence > hash_) -
             out_char_influence;
     }
     fp *= sigma_;
     fp += in_char;
     fp = mersenneModulo(fp);
-    hash_ = (uint64_t)(fp);
+    hash_ = fp;
     init_++;
   };
 };

@@ -18,13 +18,16 @@
  *
  ******************************************************************************/
 
+#include "pasta/block_tree/utils/MersenneHash.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <pasta/block_tree/block_tree.hpp>
+#include <syncstream>
 
-#define PAR_PARLAY
+#define PAR_SHARDED_SYNC
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -89,14 +92,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "shard"
 #elif defined PAR_SHARDED_SYNC
 #  include <pasta/block_tree/construction/block_tree_fp_par_sync_sharded.hpp>
-std::unique_ptr<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
   ;
-  return std::make_unique<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>(
+  return std::make_unique<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>(
       text,
       arity,
       1,
@@ -255,14 +258,26 @@ int main(int argc, char** argv) {
 
   std::cout << std::endl;
 
+  #ifdef BT_INSTRUMENT
+  std::cout << "comparisons: " << mersenne_hash_comparisons
+            << ", equals: " << mersenne_hash_equals
+            << ", collisions: " << mersenne_hash_collisions
+            << ", percent equals: "
+            << mersenne_hash_equals / ((double)mersenne_hash_comparisons)
+            << ", percent collisions: "
+            << mersenne_hash_collisions / ((double)mersenne_hash_comparisons)
+            << std::endl;
+  #endif
+
   // std::ofstream ot(out_path);
   //  bt->serialize(ot);
 #pragma omp parallel for
   for (size_t i = 0; i < text.size(); ++i) {
     const auto c = bt->access(i);
     if (c != text[i]) {
-      std::cerr << "Error at position " << i << "\nExpected: " << (char)text[i]
-                << "\nActual: " << c << std::endl;
+      std::osyncstream(std::cerr)
+          << "Error at position " << i << "\nExpected: " << (char)text[i]
+          << "\nActual: " << (char)c << std::endl;
       exit(1);
     }
   }

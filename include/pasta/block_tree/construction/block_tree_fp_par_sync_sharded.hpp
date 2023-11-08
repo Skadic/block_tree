@@ -58,10 +58,11 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
 
   /// @brief Base of the polynomial used for the Rabin-Karp hasher
   constexpr static size_type SIGMA = 256;
-  /// @brief A mersenne prime used for the Rabin-Karp hasher
-  constexpr static uint128_t PRIME = 2305843009213693951ULL;
+
   /// @brief The exponent of the mersenne prime used for the Rabin-Karp hasher
-  constexpr static uint8_t PRIME_EXPONENT = 61;
+  constexpr static uint8_t PRIME_EXPONENT = 107;
+  /// @brief A mersenne prime used for the Rabin-Karp hasher
+  constexpr static uint128_t PRIME = pasta::primer<PRIME_EXPONENT>();
 
   /// @brief A bit vector
   using BitVector = pasta::BitVector;
@@ -165,13 +166,13 @@ private:
 
     /// @brief Add a block index to the occurrences.
     /// @param block_index The block index to add to the occurrences.
-    inline void add_block_pair(size_type block_index) {
+    [[gnu::noinline]] inline void add_block_pair(size_type block_index) {
       occurrences.push_back(block_index);
     }
 
     /// @brief If the given block index is an earlier occurrence, update it
     /// @param block_index The block index of an occurrence
-    inline void update(size_type block_index) {
+    [[gnu::noinline]] void update(size_type block_index) {
       first_occ_block = std::min<size_type>(first_occ_block, block_index);
     }
   };
@@ -218,7 +219,7 @@ private:
 
     /// @brief Add a block index to the occurrences.
     /// @param block_index The block index to add to the occurrences.
-    inline void add_block(size_type block_index) {
+    [[gnu::noinline]] inline void add_block(size_type block_index) {
       occurrences.push_back(block_index);
     }
 
@@ -226,7 +227,8 @@ private:
     ///   update them
     /// @param block_index The block index of an occurrence
     /// @param block_index The offset of that occurrence
-    inline void update(size_type block_index, size_type block_offset) {
+    [[gnu::noinline]] inline void update(size_type block_index,
+                                         size_type block_offset) {
       FirstOccurrence prev_first_occ = this->first_occ.load();
       FirstOccurrence set(block_index, block_offset);
       while (block_index < prev_first_occ.block &&
@@ -512,7 +514,9 @@ private:
                  finish_idle_ns,                                               \
                  total_idle_ns,                                                \
                  handle_queue_ns,                                              \
-                 scan_hits)
+                 scan_hits,                                                    \
+                 threads,                                                      \
+                 std::cout)
 #else
 #  pragma omp parallel default(none) num_threads(threads)                      \
       shared(level, map, text, is_padded, threads_done, last_done, barrier)
@@ -581,6 +585,7 @@ private:
       {
       }
 #endif
+
       if (start < static_cast<size_t>(num_block_pairs)) {
         RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
         for (size_t i = start; i < end; ++i) {
