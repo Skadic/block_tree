@@ -18,6 +18,10 @@
  *
  ******************************************************************************/
 
+// #ifdef BT_INSTRUMENT
+#include "memphis.hpp"
+// #endif
+
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 
 #include <algorithm>
@@ -252,8 +256,8 @@ int main(int argc, char** argv) {
 
   std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
 
-#ifdef BT_MALLOC_COUNT
-  std::cout << " memory=" << malloc_count_peak();
+#ifdef MEMPHIS_ENABLED
+  std::cout << " memory=" << memphis::peak_heap_usage;
 #endif
 
   std::cout << std::endl;
