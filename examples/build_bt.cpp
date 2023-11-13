@@ -27,7 +27,7 @@
 #include <pasta/block_tree/block_tree.hpp>
 #include <syncstream>
 
-#define PAR_SHARDED_SYNC
+#define PAR_SHARDED_SYNC_SMALL
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -108,6 +108,23 @@ make_bt(std::vector<uint8_t>& text,
       queue_size);
 }
 #  define ALGO_NAME "shard_sync"
+#elif defined PAR_SHARDED_SYNC_SMALL
+#  include <pasta/block_tree/construction/block_tree_fp_par_sync_sharded_small.hpp>
+std::unique_ptr<pasta::BlockTreeFPParShardedSyncSmall<uint8_t, int32_t>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads,
+        const size_t queue_size) {
+  return std::make_unique<
+      pasta::BlockTreeFPParShardedSyncSmall<uint8_t, int32_t>>(text,
+                                                               arity,
+                                                               1,
+                                                               leaf_length,
+                                                               threads,
+                                                               queue_size);
+}
+#  define ALGO_NAME "shard_sync_small"
 #elif defined PAR_PHMAP
 #  include <pasta/block_tree/construction/block_tree_fp_par_phmap.hpp>
 std::unique_ptr<pasta::BlockTreeFPParPH<uint8_t, int32_t>>
@@ -161,6 +178,24 @@ make_bt(std::vector<uint8_t>& text,
 #ifdef BT_MALLOC_COUNT
 #  include <malloc_count.h>
 #endif
+
+#if defined PAR_SHARDED_SYNC || defined PAR_SHARDED_SYNC_SMALL
+#  define USES_QUEUE true
+#  define IS_PARALLEL true
+#else
+#  define USES_QUEUE false
+#endif
+
+#ifndef IS_PARALLEL
+#  if defined PAR_SHARDED_SYNC_SMALL || defined PAR_SHARDED_SYNC ||            \
+      defined PAR_SHARDED || defined PAR_PHMAP || defined LPF ||               \
+      defined PAR_PHMAP
+#    define IS_PARALLEL true
+#  else
+#    define IS_PARALLEL false
+#  endif
+#endif
+
 #include <sstream>
 #include <string>
 
@@ -194,6 +229,7 @@ int main(int argc, char** argv) {
 
   const size_t leaf_length = atoi(argv[3]);
 
+#if defined IS_PARALLEL
   if (argc < 5) {
     std::cerr << "Please input number of threads (ignored if single threaded "
                  "algorithm)"
@@ -202,8 +238,9 @@ int main(int argc, char** argv) {
   }
 
   const size_t threads = atoi(argv[4]);
+#endif
 
-#ifdef PAR_SHARDED_SYNC
+#if defined USES_QUEUE
   if (argc < 6) {
     std::cerr << "Please input queue size" << std::endl;
     exit(1);
@@ -241,7 +278,7 @@ int main(int argc, char** argv) {
                     arity,
                     leaf_length,
                     threads
-#ifdef PAR_SHARDED_SYNC
+#if defined PAR_SHARDED_SYNC || defined PAR_SHARDED_SYNC_SMALL
                     ,
                     queue_size
 #endif
@@ -261,7 +298,8 @@ int main(int argc, char** argv) {
             << ", percent equals: "
             << 100 * mersenne_hash_equals / ((double)mersenne_hash_comparisons)
             << ", percent collisions: "
-            <<  100 * mersenne_hash_collisions / ((double)mersenne_hash_comparisons)
+            << 100 * mersenne_hash_collisions /
+                   ((double)mersenne_hash_comparisons)
             << std::endl;
 #endif
 
