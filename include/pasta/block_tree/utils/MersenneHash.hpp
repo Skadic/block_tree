@@ -25,12 +25,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <emmintrin.h>
 #include <functional>
 #include <iostream>
 #include <syncstream>
 #include <type_traits>
 #include <vector>
-#include <emmintrin.h>
 
 namespace pasta {
 
@@ -74,147 +74,21 @@ public:
     if (hash_ != other.hash_)
       return false;
 
-#define MH_MEMCMP
+    const bool is_same = memcmp(text_->data() + start_,
+                                other.text_->data() + other.start_,
+                                length_) == 0;
 
-#ifndef MH_NOCMP
-    const std::vector<T>& text = *text_;
-    const std::vector<T>& other_text = *other.text_;
-#endif
-
-#ifdef MH_LOOP
-    for (uint64_t i = 0; i < length_; i++) {
-      if (text[start_ + i] != other_text[other.start_ + i]) {
-        return false;
-      }
-    }
-    return true;
-#elif defined MH_PACKED_LOOP
-    const size_t num_blocks = length_ / 8;
-    for (size_t block = 0; block < num_blocks; ++block) {
-      uint64_t a =
-          *reinterpret_cast<const uint64_t*>(text.data() + start_ + block * 8);
-      uint64_t b = *reinterpret_cast<const uint64_t*>(other_text.data() +
-                                                      other.start_ + block * 8);
-      if (a != b) {
-        return false;
-      }
-    }
-    return memcmp(text_->data() + start_ + num_blocks * 8,
-                  other.text_->data() + other.start_ + num_blocks * 8,
-                  length_ - num_blocks * 8) == 0;
-#elif defined MH_PACKED_LOOP_UNROLL
-    const size_t num_blocks = length_ / 16;
-    for (size_t block = 0; block < num_blocks; ++block) {
-      uint64_t a1 = *reinterpret_cast<const uint64_t*>(text.data() + start_ +
-                                                       2 * block * 8);
-      uint64_t a2 = *reinterpret_cast<const uint64_t*>(text.data() + start_ +
-                                                       (2 * block + 1) * 8);
-      uint64_t b1 = *reinterpret_cast<const uint64_t*>(
-          other_text.data() + other.start_ + 2 * block * 8);
-      uint64_t b2 = *reinterpret_cast<const uint64_t*>(
-          other_text.data() + other.start_ + (2 * block + 1) * 8);
-      if (a1 != b1 || a2 != b2) {
-        return false;
-      }
-    }
-    return memcmp(text_->data() + start_ + num_blocks * 16,
-                  other.text_->data() + other.start_ + num_blocks * 16,
-                  length_ - num_blocks * 16) == 0;
-#elif defined MH_SSE
-    // Requires SSE2
-    const size_t num_blocks = length_ / 16;
-    for (size_t block = 0; block < num_blocks; ++block) {
-      __m128i_u a = _mm_loadu_si128(reinterpret_cast<const __m128i_u*>(
-          text.data() + start_ + block * 16));
-      __m128i_u b = _mm_loadu_si128(reinterpret_cast<const __m128i_u*>(
-          other_text.data() + other.start_ + block * 16));
-      __m128i_u res = _mm_cmpeq_epi8(a, b);
-      if (0xFFFF != _mm_movemask_epi8(res)) {
-        return false;
-      }
-    }
-    return memcmp(text_->data() + start_ + num_blocks * 16,
-                  other.text_->data() + other.start_ + num_blocks * 16,
-                  length_ - num_blocks * 16) == 0;
-#elif defined MH_AVX
-    // Requires AVX-2
-    const size_t num_blocks = length_ / 32;
-    for (size_t block = 0; block < num_blocks; ++block) {
-      __m256i a = _mm256_loadu_si256(
-          reinterpret_cast<const __m256i*>(text.data() + start_ + block * 32));
-      __m256i b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
-          other_text.data() + other.start_ + block * 32));
-      __m256i res = _mm256_cmpeq_epi8(a, b);
-      if (static_cast<int>(0xFFFFFFFF) != _mm256_movemask_epi8(res)) {
-        return false;
-      }
-    }
-    return memcmp(text_->data() + start_ + num_blocks * 32,
-                  other.text_->data() + other.start_ + num_blocks * 32,
-                  length_ - num_blocks * 32) == 0;
-
-#elif defined MH_MEMCMP
-    const bool b = memcmp(text.data() + start_,
-                          other_text.data() + other.start_,
-                          length_) == 0;
-
-#  ifdef BT_INSTRUMENT
-    if (!b) {
+#ifdef BT_INSTRUMENT
+    if (!is_same) {
+      // The hash is the same but the substring isn't => collision
       mersenne_hash_collisions++;
     } else {
+      // The substrings are the same
       mersenne_hash_equals++;
     }
-#  endif
-    return b;
-
-#elif defined MH_SPARSECMP
-    // Just compare as much data as fits into a word, choosing the largest
-    // integer type that fits into the length of this window
-    static constexpr size_t bytes_per_t = sizeof(T);
-    const T* text_ptr = text.data() + start_;
-    const T* other_text_ptr = other_text.data() + other.start_;
-    bool b;
-    switch (length_ * bytes_per_t) {
-      case 1:
-        b = text[0] == other_text[0];
-        break;
-      case 2:
-      case 3: {
-        const uint16_t* ptr = reinterpret_cast<const uint16_t*>(text_ptr);
-        const uint16_t* other_ptr =
-            reinterpret_cast<const uint16_t*>(other_text_ptr);
-        b = *ptr == *other_ptr;
-        break;
-      }
-      case 4:
-      case 5:
-      case 6:
-      case 7: {
-        const uint32_t* ptr = reinterpret_cast<const uint32_t*>(text_ptr);
-        const uint32_t* other_ptr =
-            reinterpret_cast<const uint32_t*>(other_text_ptr);
-        b = *ptr == *other_ptr;
-        break;
-      }
-      default: {
-        const uint64_t* ptr = reinterpret_cast<const uint64_t*>(text_ptr);
-        const uint64_t* other_ptr =
-            reinterpret_cast<const uint64_t*>(other_text_ptr);
-        b = *ptr == *other_ptr;
-      }
-    }
-#  ifdef BT_INSTRUMENT
-    if (!b) {
-      mersenne_hash_collisions++;
-    } else {
-      mersenne_hash_equals++;
-    }
-#  endif
-    return b;
-#elif defined MH_NOCMP
-    return true;
 #endif
-  }
+    return is_same;
+  };
 };
 
 } // namespace pasta

@@ -259,9 +259,9 @@ int main(int argc, char** argv) {
             << ", equals: " << mersenne_hash_equals
             << ", collisions: " << mersenne_hash_collisions
             << ", percent equals: "
-            << mersenne_hash_equals / ((double)mersenne_hash_comparisons)
+            << 100 * mersenne_hash_equals / ((double)mersenne_hash_comparisons)
             << ", percent collisions: "
-            << mersenne_hash_collisions / ((double)mersenne_hash_comparisons)
+            <<  100 * mersenne_hash_collisions / ((double)mersenne_hash_comparisons)
             << std::endl;
 #endif
 

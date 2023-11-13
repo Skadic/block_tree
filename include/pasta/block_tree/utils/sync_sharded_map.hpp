@@ -280,8 +280,6 @@ public:
         return;
       }
 
-      static unsigned char zeroed[sizeof(StoredValue)];
-      memset(&zeroed, 0, sizeof(StoredValue));
       //  Handle all tasks in the queue
       for (size_t i = 0; i < num_tasks; ++i) {
         auto& entry = task_queue_[i];
