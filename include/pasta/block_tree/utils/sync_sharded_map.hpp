@@ -87,9 +87,9 @@ class SyncShardedMap {
   /// The sequential backing hash map type
   using SeqHashMap = SeqHashMapType<K, V>;
   /// The sequential hash map's hasher
-  using Hasher = SeqHashMap::hasher;
+  using Hasher = typename SeqHashMap::hasher;
   /// The type used for updates
-  using InputValue = UpdateFn::InputValue;
+  using InputValue = typename UpdateFn::InputValue;
 
   /// The actual pair of key and value stored in the map
   using StoredValue = std::pair<K, InputValue>;
@@ -129,7 +129,7 @@ class SyncShardedMap {
   std::barrier<decltype(FN)> barrier_;
 
   /// https://zimbry.blogspot.com/2011/09/better-bit-mixing-improving-on.html
-  inline uint64_t mix_select(uint64_t key) {
+  [[nodiscard]] uint64_t mix_select(uint64_t key) const {
     key ^= (key >> 31);
     key *= 0x7fb5d329728ea185;
     key ^= (key >> 27);
@@ -144,12 +144,13 @@ public:
   //
   /// @brief Creates a new sharded map.
   ///
-  /// @param fill_threshold The fill percentage (between 0 and 1) above which
-  /// a thread is signaled to handle its own tasks.
   /// @param thread_count The exact number of threads working on this map.
   /// @param queue_capacity The maximum amount of tasks allowed in each queue.
+  /// @param map_capacity The initial capacity for each thread's local hash map.
   ///
-  SyncShardedMap(size_t thread_count, size_t queue_capacity)
+  SyncShardedMap(size_t thread_count,
+                 size_t queue_capacity,
+                 size_t map_capacity = 1024)
       : thread_count_(thread_count),
         map_(),
         task_queue_(),
@@ -166,6 +167,7 @@ public:
                                       thread_count);
     for (size_t i = 0; i < thread_count; i++) {
       map_.emplace_back();
+      map_.back().reserve(map_capacity);
       task_queue_.emplace_back(new StoredValue[queue_capacity], queue_capacity);
       task_count_[i] = 0;
     }
@@ -229,7 +231,7 @@ public:
       }
     }
 
-    void handle_queue_sync(bool make_others_wait = true) {
+    void handle_queue_sync(const bool make_others_wait = true) {
       if (make_others_wait) {
         // If this value is >0 then other threads will also handle their queue
         // when trying to insert
@@ -316,8 +318,6 @@ public:
         target_task_count.fetch_sub(1, mem::acq_rel);
         handle_queue_sync();
         // Since the queue was handled, the task count is now 0
-        // TODO It might be worth considering the recursive call again
-        //  It might be the cause of some segfaults
         insert(std::move(pair));
         return;
       }
@@ -406,11 +406,11 @@ public:
     }
   }
 
-  SeqHashMap::iterator end() {
+  typename SeqHashMap::iterator end() {
     return map_.back().end();
   }
 
-  SeqHashMap::iterator find(const K& key) {
+  typename SeqHashMap::iterator find(const K& key) {
     const size_t hash = Hasher{}(key);
     const size_t target_thread_id = mix_select(hash);
     SeqHashMap& map = map_[target_thread_id];
@@ -446,7 +446,7 @@ public:
     return loads;
   }
 
-  [[maybe_unused]] void print_ins_upd() {
+  [[maybe_unused]] void print_ins_upd() const {
     std::osyncstream(std::cout)
         << "Inserts: " << num_inserts_.load()
         << "\nUpdates: " << num_updates_.load() << std::endl;

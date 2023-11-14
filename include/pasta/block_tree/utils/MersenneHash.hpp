@@ -25,11 +25,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <emmintrin.h>
 #include <functional>
 #include <iostream>
-#include <syncstream>
-#include <type_traits>
+#include <robin_hood.h>
 #include <vector>
 
 namespace pasta {
@@ -49,9 +47,9 @@ public:
   uint32_t start_;
   uint32_t length_;
   MersenneHash(std::vector<T> const& text,
-               uint128_t hash,
-               uint64_t start,
-               uint64_t length)
+               const uint128_t hash,
+               const uint64_t start,
+               const uint64_t length)
       : text_(&text),
         hash_(hash),
         start_(start),
@@ -62,15 +60,17 @@ public:
   constexpr MersenneHash(const MersenneHash& other) = default;
   constexpr MersenneHash(MersenneHash&& other) = default;
 
-  MersenneHash<T>& operator=(const MersenneHash<T>& other) = default;
-  MersenneHash<T>& operator=(MersenneHash<T>&& other) = default;
+  MersenneHash& operator=(const MersenneHash& other) = default;
+  MersenneHash& operator=(MersenneHash&& other) = default;
 
   bool operator==(const MersenneHash& other) const {
 #ifdef BT_INSTRUMENT
-    mersenne_hash_comparisons++;
+    ++mersenne_hash_comparisons;
 #endif
     // if (length_ != other.length_)
     // return false;
+    // std::cout << static_cast<uint64_t>(hash_) << ", "
+    //          << static_cast<uint64_t>(other.hash_) << std::endl;
     if (hash_ != other.hash_)
       return false;
 
@@ -81,10 +81,10 @@ public:
 #ifdef BT_INSTRUMENT
     if (!is_same) {
       // The hash is the same but the substring isn't => collision
-      mersenne_hash_collisions++;
+      ++mersenne_hash_collisions;
     } else {
       // The substrings are the same
-      mersenne_hash_equals++;
+      ++mersenne_hash_equals;
     }
 #endif
     return is_same;
@@ -96,7 +96,7 @@ public:
 namespace std {
 template <typename T>
 struct hash<pasta::MersenneHash<T>> {
-  pasta::MersenneHash<T>::uint128_t
+  typename pasta::MersenneHash<T>::uint128_t
   operator()(const pasta::MersenneHash<T>& hS) const {
     return hS.hash_;
   }

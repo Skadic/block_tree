@@ -26,6 +26,7 @@
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
+#include <ankerl/unordered_dense.h>
 #include <atomic>
 #include <concepts>
 #include <list>
@@ -54,7 +55,6 @@ enum class UseHash {
 ///   blocks themselves.
 /// @tparam input_type The type of the characters in the input string
 /// @tparam size_type The type used for indices etc. (must be a signed integer)
-/// @tparam queue_type The type of queue to use for communication
 ///   in the sharded hash map.
 template <std::integral input_type, std::signed_integral size_type>
 class BlockTreeFPParShardedSyncSmall : public BlockTree<input_type, size_type> {
@@ -67,17 +67,33 @@ class BlockTreeFPParShardedSyncSmall : public BlockTree<input_type, size_type> {
   constexpr static uint64_t MASK_TRAILING_ZEROS[9] =
       {64, 56, 48, 40, 32, 24, 16, 8, 0};
 
+  /// @brief Masks used for the identity hash. These depend on endianness
+  constexpr static std::array<uint64_t, 9> masks() {
+    if constexpr (std::endian::native == std::endian::big) {
+      return {0,
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[1],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[2],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[3],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[4],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[5],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[6],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[7],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[8]};
+    } else {
+      return {0,
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[1],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[2],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[3],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[4],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[5],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[6],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[7],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[8]};
+    }
+  }
+
   /// @brief Masks for identity hashes for a block size i (in bytes)
-  constexpr static uint64_t HASH_MASKS[9] = {
-      0,
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[1],
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[2],
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[3],
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[4],
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[5],
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[6],
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[7],
-      static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[8]};
+  constexpr static std::array<uint64_t, 9> HASH_MASKS = masks();
 
   /// @brief A marker for a block that has no earlier occurrence
   constexpr static size_type NO_EARLIER_OCC = -1;
@@ -88,13 +104,11 @@ class BlockTreeFPParShardedSyncSmall : public BlockTree<input_type, size_type> {
   constexpr static size_type SIGMA = 256;
 
   /// @brief The exponent of the mersenne prime used for the Rabin-Karp hasher
-  // constexpr static uint8_t PRIME_EXPONENT = 107;
-  //  constexpr static uint8_t PRIME_EXPONENT = 89;
-  constexpr static uint8_t PRIME_EXPONENT = 61;
+  constexpr static uint8_t PRIME_EXPONENT = 107;
+  // constexpr static uint8_t PRIME_EXPONENT = 89;
+  //  constexpr static uint8_t PRIME_EXPONENT = 61;
   /// @brief A mersenne prime used for the Rabin-Karp hasher
   constexpr static uint128_t PRIME = pasta::primer<PRIME_EXPONENT>();
-  // constexpr static uint128_t PRIME = (static_cast<uint128_t>(0x97009E545BB)
-  // << (14 * 4)) | static_cast<uint128_t>(0x2DA8B4A8C9A82B);
 
   /// @brief A bit vector
   using BitVector = pasta::BitVector;
@@ -104,7 +118,9 @@ class BlockTreeFPParShardedSyncSmall : public BlockTree<input_type, size_type> {
   /// @brief A sequential hash map used as backing for the sharded hash map.
   template <typename key_type, typename value_type>
   using SeqHashMap =
-      robin_hood::unordered_flat_map<key_type, value_type, std::hash<key_type>>;
+      ankerl::unordered_dense::map<key_type, value_type, std::hash<key_type>>;
+  // robin_hood::unordered_flat_map<key_type, value_type,
+  // std::hash<key_type>>;
   // std::unordered_map<key_type, value_type, std::hash<key_type>>;
 
   /// @brief A rabin karp hasher preconfigured for the current template
@@ -119,6 +135,18 @@ class BlockTreeFPParShardedSyncSmall : public BlockTree<input_type, size_type> {
             template <typename, typename> typename seq_map_type = SeqHashMap>
   using RabinKarpMap =
       SyncShardedMap<RabinKarpHash, value_type, seq_map_type, update_fn_type>;
+
+#define MIX
+  static uint64_t mix_select(uint64_t key) {
+#ifdef MIX
+    key ^= (key >> 31);
+    key *= 0x7fb5d329728ea185;
+    key ^= (key >> 27);
+    key *= 0x81dadef4bc2dd44d;
+    key ^= (key >> 33);
+#endif
+    return key;
+  }
 
 #ifdef BT_INSTRUMENT
 public:
@@ -156,9 +184,9 @@ private:
     /// @brief The number of blocks on the current level
     int64_t num_blocks;
 
-    inline LevelData(int64_t level_index_,
-                     int64_t block_size_,
-                     int64_t num_blocks_)
+    LevelData(const int64_t level_index_,
+              const int64_t block_size_,
+              const int64_t num_blocks_)
         : is_internal(nullptr),
           is_internal_rank(nullptr),
           pointers(new std::vector<size_type>()),
@@ -171,7 +199,7 @@ private:
 
     /// @brief Checks whether a block is adjacent in the text
     ///   to its successor on this level
-    [[nodiscard]] inline bool next_is_adjacent(size_t i) const {
+    [[nodiscard]] bool next_is_adjacent(size_t i) const {
       return (*block_starts)[i] + block_size == (*block_starts)[i + 1];
     }
   };
@@ -197,18 +225,18 @@ private:
         : first_occ_block(first_occ_block_),
           occurrences() {}
 
-    inline PairOccurrences(PairOccurrences&&) = default;
-    inline PairOccurrences& operator=(PairOccurrences&&) = default;
+    PairOccurrences(PairOccurrences&&) noexcept = default;
+    PairOccurrences& operator=(PairOccurrences&&) = default;
 
     /// @brief Add a block index to the occurrences.
     /// @param block_index The block index to add to the occurrences.
-    [[gnu::noinline]] inline void add_block_pair(size_type block_index) {
+    void add_block_pair(size_type block_index) {
       occurrences.push_back(block_index);
     }
 
     /// @brief If the given block index is an earlier occurrence, update it
     /// @param block_index The block index of an occurrence
-    [[gnu::noinline]] void update(size_type block_index) {
+    void update(size_type block_index) {
       first_occ_block = std::min<size_type>(first_occ_block, block_index);
     }
   };
@@ -253,6 +281,8 @@ private:
         : first_occ(other.first_occ.load()),
           occurrences(std::move(other.occurrences)) {}
 
+    ~BlockOccurrences() = default;
+
     BlockOccurrences& operator=(BlockOccurrences&& other) noexcept {
       first_occ = other.first_occ.load();
       occurrences = std::move(other.occurrences);
@@ -261,16 +291,15 @@ private:
 
     /// @brief Add a block index to the occurrences.
     /// @param block_index The block index to add to the occurrences.
-    [[gnu::noinline]] inline void add_block(size_type block_index) {
+    void add_block(size_type block_index) {
       occurrences.push_back(block_index);
     }
 
     /// @brief If the given block index and offset are an earlier occurrence,
     ///   update them
     /// @param block_index The block index of an occurrence
-    /// @param block_index The offset of that occurrence
-    [[gnu::noinline]] inline void update(size_type block_index,
-                                         size_type block_offset) {
+    /// @param block_offset The offset of that occurrence
+    void update(size_type block_index, size_type block_offset) {
       FirstOccurrence prev_first_occ = this->first_occ.load();
       FirstOccurrence set(block_index, block_offset);
       while (block_index < prev_first_occ.block &&
@@ -346,6 +375,9 @@ private:
 
   /// @brief Constructs the block tree.
   /// @param text The input text.
+  /// @param threads The number of threads to use for construction
+  /// @param queue_size The max number of items in each thread's queue for its
+  /// hash map
   void construct(const std::vector<input_type>& text,
                  const size_t threads,
                  const size_t queue_size) {
@@ -410,8 +442,8 @@ private:
       TimePoint now = Clock::now();
 #endif
       LevelData& current = levels.back();
-      if (2 * static_cast<uint64_t>(current.block_size) >
-          8 / sizeof(input_type)) {
+      if (2 * static_cast<uint64_t>(current.block_size * sizeof(input_type)) >
+          8) {
         scan_block_pairs<UseHash::RABIN_KARP>(text,
                                               current,
                                               is_padded,
@@ -430,7 +462,7 @@ private:
                       .count();
       now = Clock::now();
 #endif
-      if (static_cast<uint64_t>(current.block_size) > 8 / sizeof(input_type)) {
+      if (static_cast<uint64_t>(current.block_size * sizeof(input_type)) > 8) {
         scan_blocks<UseHash::RABIN_KARP>(text,
                                          current,
                                          is_padded,
@@ -521,9 +553,10 @@ private:
     return 1 + ((x - 1) / y);
   }
 
-  [[maybe_unused]] void print_aggregate(const char* name,
-                                        const tlx::Aggregate<size_t>& agg,
-                                        size_t div = 1) {
+  [[maybe_unused]] static void
+  print_aggregate(const char* name,
+                  const tlx::Aggregate<size_t>& agg,
+                  const size_t div = 1) {
     printf("%s -> min: %10u, max: %10u, avg: %10.2f, dev: %10.2f, #: %10u\n",
            name,
            static_cast<unsigned int>(agg.min() / div),
@@ -540,6 +573,9 @@ private:
   /// @param level The data for the current level.
   /// @param is_padded `true` iff the last block on this level *does not* end at
   ///   the exact end of the text.
+  /// @param threads Number of threads to use
+  /// @param queue_size The size of the queue to use per thread in the sharded
+  ///   hash map.
   /// @tparam use_hash Whether to use a Rabin-Karp hasher to hash substrings or
   ///   use the blocks' contents themselves as hashes.
   ///   For block sizes greater than 4 bytes, use Rabin-Karp.
@@ -602,7 +638,7 @@ private:
 
       // Hash every window and determine for all block pairs whether
       // they have previous occurrences.
-      size_t segment_size =
+      const size_t segment_size =
           std::max<size_t>(1, ceil_div(num_block_pairs, num_threads));
 
       // Start and end index of the current thread's segment
@@ -626,28 +662,25 @@ private:
           shard.insert(hash, i);
         }
       } else {
-        const uint64_t TRAILING_ZEROS =
-            MASK_TRAILING_ZEROS[pair_size * sizeof(input_type)];
         const uint64_t HASH_MASK = HASH_MASKS[pair_size * sizeof(input_type)];
         for (size_t i = start; i < end; ++i) {
           const size_t block_start = block_starts[i];
           const input_type* block_start_ptr = text.data() + block_start;
           const uint64_t hash_value =
-              (*reinterpret_cast<const uint64_t*>(block_start_ptr) &
-               HASH_MASK) >>
-              TRAILING_ZEROS;
-          RabinKarpHash hash(text, hash_value, block_start, block_size);
+              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+          RabinKarpHash hash(text,
+                             mix_select(hash_value),
+                             block_start,
+                             block_size);
           // Try to find the hash in the map, insert a new entry if it
           // doesn't exist, and add the current block to the entry
           shard.insert(hash, i);
         }
       }
-      const size_t thread_order =
-          threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
 
-      const bool is_last_thread = thread_order == num_threads;
-
-      if (is_last_thread) {
+      if (const size_t thread_order =
+              threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+          thread_order == num_threads) {
         last_done.store(true, std::memory_order_release);
       }
 
@@ -855,17 +888,14 @@ private:
                                       tlx::Aggregate<size_t>& agg
 #endif
   ) {
-    const uint64_t TRAILING_ZEROS =
-        MASK_TRAILING_ZEROS[pair_size / sizeof(input_type)];
     const uint64_t HASH_MASK = HASH_MASKS[pair_size / sizeof(input_type)];
     const input_type* block_start_ptr = text.data() + block_start;
     for (size_t offset = 0; offset < num_iterations; ++offset) {
       const uint64_t hash_value =
           (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
-           HASH_MASK) >>
-          TRAILING_ZEROS;
+           HASH_MASK);
       RabinKarpHash current_hash(text,
-                                 hash_value,
+                                 mix_select(hash_value),
                                  block_start + offset,
                                  pair_size);
       // Find the hash of the current window among the hashed block
@@ -889,10 +919,12 @@ private:
   /// @brief Determine the positions for each block's earliest occurrence if
   /// there is any.
   ///
-  /// @param s The input text
+  /// @param text The input text
   /// @param level_data The data for the current level
   /// @param is_padded true, iff the last block of the level extends past the
   ///   end of the text
+  /// @param threads The number of threads to use during construction.
+  /// @param queue_size The max number of items in each thread's queues.
   /// @tparam use_hash Determines whether to use a rabin karp hash for hashing
   /// text windows or to use the block's content as a hash. For any window size
   /// greater than 8 bytes, use Rabin-Karp.
@@ -916,7 +948,7 @@ private:
     }
 
     // A map hashing blocks and saving where they occur.
-    BlockMap links(threads, queue_size);
+    BlockMap links(threads, queue_size, num_blocks);
 
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_done = 0;
@@ -974,27 +1006,24 @@ private:
           shard.insert(hash, {i, 0});
         }
       } else {
-        const uint64_t TRAILING_ZEROS =
-            sizeof(input_type) * 8 * (8 - block_size);
-        const uint64_t HASH_MASK = static_cast<uint64_t>(~0) << TRAILING_ZEROS;
+        const uint64_t HASH_MASK = HASH_MASKS[block_size / sizeof(input_type)];
         for (size_t i = start; i < end; ++i) {
           const size_t block_start = block_starts[i];
           const input_type* block_start_ptr = text.data() + block_start;
           const uint64_t hash_value =
-              (*reinterpret_cast<const uint64_t*>(block_start_ptr) &
-               HASH_MASK) >>
-              TRAILING_ZEROS;
-          RabinKarpHash hash(text, hash_value, block_start, block_size);
+              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+          RabinKarpHash hash(text,
+                             mix_select(hash_value),
+                             block_start,
+                             block_size);
 
           shard.insert(hash, {i, 0});
         }
       }
-      const size_t thread_order =
-          num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
 
-      const bool is_last_thread = thread_order == num_threads;
-
-      if (is_last_thread) {
+      if (const size_t thread_order =
+              num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+          thread_order == num_threads) {
         last_done.store(true, std::memory_order_release);
       }
 
@@ -1174,18 +1203,15 @@ private:
                                  tlx::Aggregate<size_t>& hits
 #endif
   ) {
-    const uint64_t TRAILING_ZEROS =
-        MASK_TRAILING_ZEROS[level_data.block_size / sizeof(input_type)];
     const uint64_t HASH_MASK =
         HASH_MASKS[level_data.block_size / sizeof(input_type)];
     const input_type* block_start_ptr = text.data() + block_start;
     for (size_type offset = 0; offset < level_data.block_size; ++offset) {
       const uint64_t hash_value =
           (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
-           HASH_MASK) >>
-          TRAILING_ZEROS;
+           HASH_MASK);
       RabinKarpHash hash(text,
-                         hash_value,
+                         mix_select(hash_value),
                          block_start + offset,
                          level_data.block_size);
       // Find all blocks in the multimap that match our hash
@@ -1266,7 +1292,7 @@ private:
       for (size_t block = 0; block < levels[level].is_internal->size();
            block++) {
         if ((*levels[level].is_internal)[block]) {
-          new_num_internal[level]++;
+          ++new_num_internal[level];
         }
       }
     }
@@ -1429,7 +1455,7 @@ private:
 
       (*pointers)[num_back_blocks] = ptr - prefix_pruned_blocks[ptr];
       (*offsets)[num_back_blocks] = offset;
-      num_back_blocks++;
+      ++num_back_blocks;
     }
 
     sdsl::util::bit_compress(*pointers);
@@ -1577,5 +1603,4 @@ public:
     }
   }
 };
-
 } // namespace pasta

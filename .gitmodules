@@ -41,3 +41,6 @@
 [submodule "extlib/parlayhash"]
 	path = extlib/parlayhash
 	url = https://github.com/cmuparlay/parlayhash
+[submodule "extlib/unordered_dense"]
+	path = extlib/unordered_dense
+	url = https://github.com/martinus/unordered_dense

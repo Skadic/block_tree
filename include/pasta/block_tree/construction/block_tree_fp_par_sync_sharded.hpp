@@ -61,8 +61,8 @@ class BlockTreeFPParShardedSync : public BlockTree<input_type, size_type> {
 
   /// @brief The exponent of the mersenne prime used for the Rabin-Karp hasher
   // constexpr static uint8_t PRIME_EXPONENT = 107;
-  constexpr static uint8_t PRIME_EXPONENT = 89;
-  // constexpr static uint8_t PRIME_EXPONENT = 61;
+  // constexpr static uint8_t PRIME_EXPONENT = 89;
+  constexpr static uint8_t PRIME_EXPONENT = 61;
   /// @brief A mersenne prime used for the Rabin-Karp hasher
   constexpr static uint128_t PRIME = pasta::primer<PRIME_EXPONENT>();
   // constexpr static uint128_t PRIME = (static_cast<uint128_t>(0x97009E545BB)

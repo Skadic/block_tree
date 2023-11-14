@@ -72,6 +72,7 @@ if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
     if (PASTA_BLOCK_TREE_BENCH)
         target_compile_definitions(build_bt PRIVATE BT_INSTRUMENT)
         target_compile_definitions(build_bt PRIVATE BT_BENCH)
+        #target_compile_definitions(build_bt PRIVATE ROBIN_HOOD_LOG_ENABLED)
     endif ()
 
     if (PASTA_BLOCK_TREE_MALLOC_COUNT)
@@ -152,5 +153,7 @@ target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/parallel-hashmap/parallel_hashmap)
 target_include_directories(pasta_block_tree SYSTEM INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/parlayhash/include)
+target_include_directories(pasta_block_tree SYSTEM INTERFACE
+        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/unordered_dense/include)
 
 ################################################################################
