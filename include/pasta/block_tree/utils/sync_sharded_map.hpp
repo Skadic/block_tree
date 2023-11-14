@@ -148,9 +148,7 @@ public:
   /// @param queue_capacity The maximum amount of tasks allowed in each queue.
   /// @param map_capacity The initial capacity for each thread's local hash map.
   ///
-  SyncShardedMap(size_t thread_count,
-                 size_t queue_capacity,
-                 size_t map_capacity = 1024)
+  SyncShardedMap(size_t thread_count, size_t queue_capacity)
       : thread_count_(thread_count),
         map_(),
         task_queue_(),
@@ -167,7 +165,6 @@ public:
                                       thread_count);
     for (size_t i = 0; i < thread_count; i++) {
       map_.emplace_back();
-      map_.back().reserve(map_capacity);
       task_queue_.emplace_back(new StoredValue[queue_capacity], queue_capacity);
       task_count_[i] = 0;
     }

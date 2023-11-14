@@ -27,7 +27,7 @@
 #include <pasta/block_tree/block_tree.hpp>
 #include <syncstream>
 
-#define PAR_SHARDED_SYNC_SMALL
+#define PAR_SHARDED_SYNC
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -131,7 +131,8 @@ std::unique_ptr<pasta::BlockTreeFPParPH<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
-        const size_t threads) {
+        const size_t threads,
+        const size_t) {
   ;
   return std::make_unique<pasta::BlockTreeFPParPH<uint8_t, int32_t>>(
       text,
@@ -147,7 +148,8 @@ std::unique_ptr<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
-        const size_t threads) {
+        const size_t threads,
+        const size_t) {
   ;
   return std::make_unique<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>(
       text,
@@ -163,7 +165,8 @@ std::unique_ptr<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
-        const size_t threads) {
+        const size_t threads,
+        const size_t) {
   ;
   return std::make_unique<pasta::BlockTreeFPParPHF<uint8_t, int32_t>>(
       text,
@@ -173,10 +176,6 @@ make_bt(std::vector<uint8_t>& text,
       threads);
 }
 #  define ALGO_NAME "par_phf"
-#endif
-
-#ifdef BT_MALLOC_COUNT
-#  include <malloc_count.h>
 #endif
 
 #if defined PAR_SHARDED_SYNC || defined PAR_SHARDED_SYNC_SMALL
@@ -229,7 +228,7 @@ int main(int argc, char** argv) {
 
   const size_t leaf_length = atoi(argv[3]);
 
-#if defined IS_PARALLEL
+#if IS_PARALLEL
   if (argc < 5) {
     std::cerr << "Please input number of threads (ignored if single threaded "
                  "algorithm)"
@@ -238,14 +237,18 @@ int main(int argc, char** argv) {
   }
 
   const size_t threads = atoi(argv[4]);
+#else
+  const size_t threads = 1;
 #endif
 
-#if defined USES_QUEUE
+#if USES_QUEUE
   if (argc < 6) {
     std::cerr << "Please input queue size" << std::endl;
     exit(1);
   }
   const size_t queue_size = atoi(argv[5]);
+#else
+  const size_t queue_size = 0;
 #endif
 
   std::stringstream ss;
@@ -274,15 +277,7 @@ int main(int argc, char** argv) {
             << " threads=" << threads << " arity=" << arity
             << " leaf_length=" << leaf_length;
   TimePoint now = Clock::now();
-  auto bt = make_bt(text,
-                    arity,
-                    leaf_length,
-                    threads
-#if defined PAR_SHARDED_SYNC || defined PAR_SHARDED_SYNC_SMALL
-                    ,
-                    queue_size
-#endif
-  );
+  auto bt = make_bt(text, arity, leaf_length, threads, queue_size);
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
           .count();

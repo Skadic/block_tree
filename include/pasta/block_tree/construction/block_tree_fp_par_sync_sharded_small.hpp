@@ -948,7 +948,7 @@ private:
     }
 
     // A map hashing blocks and saving where they occur.
-    BlockMap links(threads, queue_size, num_blocks);
+    BlockMap links(threads, queue_size);
 
     // The number of threads finished with hashing blocks
     std::atomic_size_t num_done = 0;
