@@ -185,6 +185,7 @@ make_bt(std::vector<uint8_t>& text,
 
 #include <sstream>
 #include <string>
+#include <tlx/cmdline_parser.hpp>
 
 using Clock = std::chrono::high_resolution_clock;
 using TimePoint = Clock::time_point;
@@ -192,55 +193,60 @@ using Duration = Clock::duration;
 
 int main(int argc, char** argv) {
   using namespace pasta;
-  if (argc < 2) {
-    std::cerr << "Please input file" << std::endl;
-    exit(1);
+
+  tlx::CmdlineParser cp;
+  cp.set_description(
+      "Build a block tree for a given input text or bit vector.");
+
+  std::string file;
+  cp.add_param_string("file",
+                      file,
+                      "The path to the file which to build a block tree from");
+
+  size_t arity = 0;
+  cp.add_param_size_t("arity", arity, "The arity of the block tree");
+  size_t leaf_length = 0;
+  cp.add_param_size_t(
+      "leaf",
+      arity,
+      "The maximum number of characters saved verbatim per leaf block.");
+
+  size_t threads = 1;
+  cp.add_size_t('t',
+                "threads",
+                threads,
+                "The number of threads to use for parallel algorithms (ignored "
+                "for sequential algorithms)");
+  size_t queue_size = 1024;
+  cp.add_size_t(
+      'q',
+      "queue_size",
+      queue_size,
+      "The size of each thread's queue used for sharded hash map algorithms");
+
+  bool make_bv = false;
+  cp.add_bool('b',
+              "bitvec",
+              make_bv,
+              "Whether to interpret the input as a bitvector. If \"-o\" is not "
+              "used, each byte of the input file will be interpreted as 8 bits "
+              "of the bit vector respectively. In each byte, the least "
+              "significant bit is index 0.");
+
+  std::string one_chars = "";
+  cp.add_string(
+      'o',
+      "one_chars",
+      one_chars,
+      "A string to be used with the \"-b\" flag. If used, each character of "
+      "the input represents one bit of the bit vector. It will be a 1 if this "
+      "parameter string contains the respective character, 0 otherwise.");
+
+  if (!cp.process(argc, argv)) {
+    return 1;
   }
 
-  if (!std::filesystem::exists(argv[1])) {
-    std::cerr << "File " << argv[1] << " does not exist" << std::endl;
-    exit(1);
-  }
-
-  if (argc < 3) {
-    std::cerr << "Please input tree arity (tau)" << std::endl;
-    exit(1);
-  }
-
-  const size_t arity = atoi(argv[2]);
-
-  if (argc < 4) {
-    std::cerr << "Please input max leaf length" << std::endl;
-    exit(1);
-  }
-  const size_t leaf_length = atoi(argv[3]);
-
-#if IS_PARALLEL
-  if (argc < 5) {
-    std::cerr << "Please input number of threads (ignored if single threaded "
-                 "algorithm)"
-              << std::endl;
-    exit(1);
-  }
-
-  const size_t threads = atoi(argv[4]);
-#else
-  const size_t threads = 1;
-#endif
-
-#if USES_QUEUE
-  if (argc < 6) {
-    std::cerr << "Please input queue size" << std::endl;
-    exit(1);
-  }
-  const size_t queue_size = atoi(argv[5]);
-#else
-  const size_t queue_size = 0;
-#endif
-
-  std::stringstream ss;
-  ss << argv[1] << "_arit" << arity << "_leaf" << leaf_length << "_new.bt";
-  std::string out_path = ss.str();
+  std::cout << one_chars << std::endl;
 
 #ifdef BT_DBG
   std::cout << "building block tree with parameters:"
@@ -249,103 +255,101 @@ int main(int argc, char** argv) {
             << std::endl;
 #endif
 
-#ifdef BIT_BT
   pasta::BitVector bv;
-#else
   std::vector<uint8_t> text;
-#endif
   {
     std::string input;
     std::ifstream t(argv[1]);
     std::stringstream buffer;
     buffer << t.rdbuf();
     input = buffer.str();
-#ifdef BIT_BT
-    new (&bv) pasta::BitVector(input.size());
-    for (size_t i = 0; i < input.size(); ++i) {
-      bv[i] = input[i] == 'G' || input[i] == 'A';
+    if (make_bv) {
+      if (one_chars.empty()) {
+        // Interpret each character as 8 bits
+        new (&bv) pasta::BitVector(input.size() * 8);
+        std::span<std::byte> bytes = std::as_writable_bytes(bv.data());
+        for (size_t i = 0; i < input.size(); ++i) {
+          bytes[i] = std::byte{static_cast<uint8_t>(input[i])};
+        }
+      } else {
+        // Interpret each character as a bit
+        new (&bv) pasta::BitVector(input.size());
+        std::array<bool, 256> is_one;
+        for (char c : one_chars) {
+          is_one[static_cast<uint8_t>(c)] = true;
+        }
+        for (size_t i = 0; i < input.size(); ++i) {
+          bv[i] = is_one[static_cast<uint8_t>(input[i])];
+        }
+      }
+    } else {
+      text = std::vector<uint8_t>(input.begin(), input.end());
     }
-#else
-    text = std::vector<uint8_t>(input.begin(), input.end());
-#endif
   }
 
   std::cout << "RESULT algo=" << ALGO_NAME
-            << " file=" << std::filesystem::path(argv[1]).filename().string()
-#ifdef BIT_BT
-            << " bv_size=" << bv.size()
-#else
-            << " file_size=" << text.size()
-#endif
-            << " threads=" << threads << " arity=" << arity
+            << " file=" << std::filesystem::path(file).filename().string();
+  if (make_bv) {
+    std::cout << " bv_size=" << bv.size();
+  } else {
+    std::cout << " file_size=" << text.size();
+  }
+  std::cout << " threads=" << threads << " arity=" << arity
             << " leaf_length=" << leaf_length;
   TimePoint now = Clock::now();
-  // auto bt = make_bt(text, arity, leaf_length, threads, queue_size);
-  auto bt = std::make_unique<BitBlockTreeSharded<int32_t>>(bv,
-                                                           arity,
-                                                           20,
-                                                           leaf_length,
-                                                           threads,
-                                                           queue_size);
-  auto elapsed =
-      std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - now)
-          .count();
 
-  std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
+  if (make_bv) {
+    // Make bit vector block tree
+    auto bt = std::make_unique<BitBlockTreeSharded<int32_t>>(bv,
+                                                             arity,
+                                                             1,
+                                                             leaf_length,
+                                                             threads,
+                                                             queue_size);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       Clock::now() - now)
+                       .count();
+    std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
+    std::cout << std::endl;
 
-  std::cout << std::endl;
-
-#ifdef BT_INSTRUMENT
-  std::cout << "comparisons: " << mersenne_hash_comparisons
-            << ", equals: " << mersenne_hash_equals
-            << ", collisions: " << mersenne_hash_collisions
-            << ", percent equals: "
-            << 100 * mersenne_hash_equals / ((double)mersenne_hash_comparisons)
-            << ", percent collisions: "
-            << 100 * mersenne_hash_collisions /
-                   ((double)mersenne_hash_comparisons)
-            << std::endl;
+#if defined BT_INSTRUMENT && defined BT_DBG
+    pasta::print_hash_data();
 #endif
 
-  // std::ofstream ot(out_path);
-  //  bt->serialize(ot);
-#ifdef BIT_BT
-#else
-#  pragma omp parallel for
-  for (size_t i = 0; i < text.size(); ++i) {
-    const auto c = bt->access(i);
-    if (c != text[i]) {
-      std::osyncstream(std::cerr)
-          << "Error at position " << i
-          << "\nExpected: " << static_cast<char>(text[i])
-          << "\nActual: " << static_cast<char>(c) << std::endl;
-      exit(1);
-    }
-  }
-#endif
-  // ot.close();
-  /*
-  for (size_t i = 0; i < bv.size() / 8; i++) {
-    uint8_t b = 0;
-    for (char j = 0; j < 8; j++) {
-      b |= bt->access(i * 8 + j) << j;
-    }
-    std::cout << i << ": ";
-    std::cout << std::flush
-              << std::bitset<8>{static_cast<uint8_t>(
-                     std::as_bytes(bv.data())[i])}
-              << " ";
-    std::cout << std::bitset<8>{b} << std::endl;
-  }
-  */
 #pragma omp parallel for
-  for (size_t i = 0; i < bv.size(); ++i) {
-    const bool c = bt->access(i);
-    if (c != bv[i]) {
-      std::osyncstream(std::cerr)
-          << "Error at position " << i << "\nExpected: " << std::boolalpha
-          << bv[i] << "\nActual: " << c << std::noboolalpha << std::endl;
-      exit(1);
+    for (size_t i = 0; i < bv.size(); ++i) {
+      const bool c = bt->access(i);
+      if (c != bv[i]) {
+        std::osyncstream(std::cerr)
+            << "Error at position " << i << "\nExpected: " << std::boolalpha
+            << bv[i] << "\nActual: " << c << std::noboolalpha << std::endl;
+        exit(1);
+      }
+    }
+  } else {
+    // Make text block tree
+    auto bt = make_bt(text, arity, leaf_length, threads, queue_size);
+    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       Clock::now() - now)
+                       .count();
+
+    std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
+    std::cout << std::endl;
+
+#if defined BT_INSTRUMENT && defined BT_DBG
+    pasta::print_hash_data();
+#endif
+
+#pragma omp parallel for
+    for (size_t i = 0; i < text.size(); ++i) {
+      const auto c = bt->access(i);
+      if (c != text[i]) {
+        std::osyncstream(std::cerr)
+            << "Error at position " << i
+            << "\nExpected: " << static_cast<char>(text[i])
+            << "\nActual: " << static_cast<char>(c) << std::endl;
+        exit(1);
+      }
     }
   }
 
