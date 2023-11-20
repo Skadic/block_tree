@@ -41,6 +41,7 @@ __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
 
+/*
 /// @brief Determine whether to use a Rabin-Karp hash for hashing text windows
 /// or just use the block's content itself as a hash, stored in an integer.
 enum class UseHash {
@@ -49,6 +50,7 @@ enum class UseHash {
   /// @brief Use the block's content as a hash
   IDENTITY
 };
+*/
 
 /// @brief A parallel block tree construction algorithm using Rabin-Karp hashes
 ///   and a sharded hash map. Small blocks are not RK-hashed but rather use the

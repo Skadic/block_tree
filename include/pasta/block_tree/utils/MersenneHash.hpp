@@ -28,6 +28,7 @@
 #include <functional>
 #include <iostream>
 #include <robin_hood.h>
+#include <span>
 #include <vector>
 
 namespace pasta {
@@ -42,7 +43,7 @@ template <typename T>
 class MersenneHash {
 public:
   __extension__ typedef unsigned __int128 uint128_t;
-  const std::vector<T>* text_;
+  std::span<const T> text_;
   uint128_t hash_;
   uint32_t start_;
   uint32_t length_;
@@ -50,12 +51,21 @@ public:
                const uint128_t hash,
                const uint64_t start,
                const uint64_t length)
-      : text_(&text),
+      : text_(text),
         hash_(hash),
         start_(start),
         length_(length){};
 
-  constexpr MersenneHash() : text_(nullptr), hash_(0), start_(0), length_(0){};
+  MersenneHash(const std::span<const T> text,
+               const uint128_t hash,
+               const uint64_t start,
+               const uint64_t length)
+      : text_(text),
+        hash_(hash),
+        start_(start),
+        length_(length){};
+
+  constexpr MersenneHash() : text_(), hash_(0), start_(0), length_(0){};
 
   constexpr MersenneHash(const MersenneHash& other) = default;
   constexpr MersenneHash(MersenneHash&& other) = default;
@@ -74,8 +84,8 @@ public:
     if (hash_ != other.hash_)
       return false;
 
-    const bool is_same = memcmp(text_->data() + start_,
-                                other.text_->data() + other.start_,
+    const bool is_same = memcmp(text_.data() + start_,
+                                other.text_.data() + other.start_,
                                 length_) == 0;
 
 #ifdef BT_INSTRUMENT

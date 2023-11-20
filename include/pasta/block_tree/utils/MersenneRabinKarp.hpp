@@ -52,7 +52,7 @@ template <class T, class size_type, uint8_t mersenne_exponent = 0>
 class MersenneRabinKarp {
 public:
   /// The text being hashed
-  std::vector<T> const& text_;
+  std::span<const T> text_;
   uint128_t sigma_;
   /// The start index of the currently hashed window
   uint64_t init_;
@@ -65,17 +65,17 @@ public:
   uint128_t max_sigma_;
 
   /// @brief Construct a new Rabin Karp hasher.
-  /// @param text The text to hash.
+  /// @param text The text to hash. (not just the window but the entire text)
   /// @param sigma The alphabet size.
   /// @param init The start index of the first hashed window in the text.
   /// @param length The window size.
   /// @param prime A large prime used for modulus operations
   ///   iff not using mersenne_exponent.
-  MersenneRabinKarp(std::vector<T> const& text,
-                    uint64_t sigma,
-                    uint64_t init,
-                    uint64_t length,
-                    uint128_t prime)
+  MersenneRabinKarp(const std::span<const T> text,
+                    const uint64_t sigma,
+                    const uint64_t init,
+                    const uint64_t length,
+                    const uint128_t prime)
       : text_(text),
         sigma_(sigma),
         init_(init),
@@ -86,7 +86,7 @@ public:
     uint128_t sigma_c = 1;
     for (uint64_t i = init_; i < init_ + length_; i++) {
       fp = fp * sigma;
-      fp = mersenneModulo(fp + text_.at(i));
+      fp = mersenneModulo(fp + text_[i]);
     }
     for (uint64_t i = 0; i < length_ - 1; i++) {
       sigma_c = mersenneModulo(sigma_c * sigma_);
@@ -95,9 +95,16 @@ public:
     max_sigma_ = sigma_c;
   };
 
+  MersenneRabinKarp(const std::vector<T>& text,
+                    const uint64_t sigma,
+                    const uint64_t init,
+                    const uint64_t length,
+                    const uint128_t prime)
+      : MersenneRabinKarp(std::span(text), sigma, init, length, prime) {}
+
   /// @brief Moves the hasher to the specified start index in the backing
   ///   vector.
-  void restart(uint64_t index) {
+  void restart(const uint64_t index) {
     if (index + length_ >= text_.size()) {
       return;
     }
@@ -110,7 +117,7 @@ public:
     hash_ = fp;
   };
 
-  inline uint128_t mersenneModulo(uint128_t k) {
+  inline uint128_t mersenneModulo(uint128_t k) const {
     if constexpr (mersenne_exponent == 0) {
       return k % prime_;
     } else {

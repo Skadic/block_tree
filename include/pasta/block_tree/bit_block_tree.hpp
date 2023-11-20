@@ -2,6 +2,7 @@
  * This file is part of pasta::block_tree
  *
  * Copyright (C) 2022 Daniel Meyer
+ * Copyright (C) 2023 Etienne Palanga <etienne.palanga@tu-dortmund.de>
  *
  * pasta::block_tree is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,24 +21,22 @@
 
 #pragma once
 
-#include <iostream>
+#include <ankerl/unordered_dense.h>
 #include <omp.h>
 #include <pasta/bit_vector/bit_vector.hpp>
-#include <pasta/bit_vector/support/find_l2_flat_with.hpp>
-#include <pasta/bit_vector/support/flat_rank.hpp>
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
 #include <pasta/bit_vector/support/optimized_for.hpp>
 #include <pasta/bit_vector/support/rank.hpp>
 #include <pasta/bit_vector/support/rank_select.hpp>
-#include <pasta/bit_vector/support/wide_rank.hpp>
 #include <pasta/bit_vector/support/wide_rank_select.hpp>
 #include <sdsl/int_vector.hpp>
 #include <vector>
+#include <iostream>
 
 namespace pasta {
 
-template <typename input_type, typename size_type>
-class BlockTree {
+template <std::signed_integral size_type>
+class BitBlockTree {
 public:
   /// @brief If this is true, then the only levels of the tree start to be
   ///   included starting at the first level that contains a back block
@@ -45,12 +44,20 @@ public:
   /// For example, if levels 0 to 5 do not contain any back blocks, then the
   /// tree will only contain levels 6 and below.
   bool CUT_FIRST_LEVELS = true;
+
+  using BVStoreType = pasta::BitVector::RawDataType;
+  constexpr static size_t BV_STORE_TYPE_BITS = sizeof(BVStoreType) * 8;
+  constexpr static size_t BV_STORE_TYPE_BYTES = sizeof(BVStoreType);
+
   size_type tau_;
   size_type max_leaf_length_;
   size_type s_ = 1;
   size_type leaf_size = 0;
   size_type amount_of_leaves = 0;
+  size_type num_bits;
   bool rank_support = false;
+  /// \brief Bit vectors for each level determining whether a block is internal
+  /// (=1) or not (=0)
   std::vector<pasta::BitVector*> block_tree_types_;
   std::vector<pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>*>
       block_tree_types_rs_;
@@ -59,23 +66,26 @@ public:
   //    std::vector<sdsl::int_vector<>*> block_tree_encoded_;
   std::vector<int64_t> block_size_lvl_;
   std::vector<int64_t> block_per_lvl_;
-  std::vector<input_type> leaves_;
+  std::vector<uint8_t> leaves_;
 
   std::vector<uint8_t> compress_map_;
   std::vector<uint8_t> decompress_map_;
   sdsl::int_vector<> compressed_leaves_;
 
-  ankerl::unordered_dense::map<input_type, size_type> chars_index_;
-  std::vector<input_type> chars_;
+  ankerl::unordered_dense::map<uint8_t, size_type> chars_index_;
+  std::vector<uint8_t> chars_;
   size_type u_chars_;
-  std::vector<std::vector<int64_t>> top_level_c_ranks_;
   std::vector<std::vector<sdsl::int_vector<>>> c_ranks_;
   std::vector<std::vector<sdsl::int_vector<>>> pointer_c_ranks_;
 
-  int64_t access(size_type index) {
+  bool access(const size_type bit_index) {
+    // FIXME: As of now this works on little endian systems only
+    const int64_t byte_index = bit_index / 8;
+    const int64_t bit_offset = bit_index % 8;
+
     int64_t block_size = block_size_lvl_[0];
-    int64_t blk_pointer = index / block_size_lvl_[0];
-    int64_t off = index % block_size_lvl_[0];
+    int64_t blk_pointer = byte_index / block_size_lvl_[0];
+    int64_t off = byte_index % block_size_lvl_[0];
     int64_t child;
     for (size_type i = 0; static_cast<uint64_t>(i) < block_tree_types_.size();
          i++) {
@@ -97,10 +107,13 @@ public:
       off = off % block_size;
       blk_pointer = lvl_rs.rank1(blk_pointer) * tau_ + child;
     }
-    return decompress_map_[compressed_leaves_[blk_pointer * leaf_size + off]];
+    const uint8_t byte =
+        decompress_map_[compressed_leaves_[blk_pointer * leaf_size + off]];
+    //std::cout << std::bitset<8>(byte) << std::endl;
+    return ((1 << bit_offset) & byte) != 0;
   };
 
-  int64_t select(input_type c, size_type j) {
+  int64_t select(uint8_t c, size_type j) {
     auto c_index = chars_index_[c];
     auto& top_level = *block_tree_types_[0];
 
@@ -199,7 +212,7 @@ public:
     return s + l;
   }
 
-  int64_t rank_base(input_type c, size_type index) {
+  int64_t rank_base(uint8_t c, size_type index) {
     pasta::BitVector& top_level = *block_tree_types_[0];
     auto& top_level_rs = *block_tree_types_rs_[0];
     auto& top_level_ptr = *block_tree_pointers_[0];
@@ -284,7 +297,7 @@ public:
     return rank;
   }
 
-  int64_t rank(input_type c, size_type index) {
+  int64_t rank(uint8_t c, size_type index) {
     pasta::BitVector& top_level = *block_tree_types_[0];
     auto& top_level_rs = *block_tree_types_rs_[0];
     auto& top_level_ptr = *block_tree_pointers_[0];
@@ -397,7 +410,7 @@ public:
     for (auto v : block_per_lvl_) {
       space_usage += sizeof(v);
     }
-    // space_usage += leaves_.size() * sizeof(input_type);
+    // space_usage += leaves_.size() * sizeof(uint8_t);
     space_usage += sdsl::size_in_bytes(compressed_leaves_);
     space_usage += compress_map_.size();
 
@@ -405,13 +418,14 @@ public:
   };
 
   void compress_leaves() {
+    // Holds a 1 on every char that exists
     compress_map_.resize(256, 0);
     decompress_map_.resize(256, 0);
     for (size_t i = 0; i < this->leaves_.size(); ++i) {
       compress_map_[this->leaves_[i]] = 1;
     }
     for (size_t c = 0, cur_val = 0; c < this->compress_map_.size(); ++c) {
-      size_t tmp = compress_map_[c];
+      const size_t tmp = compress_map_[c];
       compress_map_[c] = cur_val;
       decompress_map_[cur_val] = c;
       cur_val += tmp;
@@ -589,7 +603,7 @@ public:
     padding = tmp_padding - text_length;
   }
 
-  size_type rank_block(input_type c, size_type i, size_type j) {
+  size_type rank_block(uint8_t c, size_type i, size_type j) {
     if (static_cast<uint64_t>(j) >= block_tree_types_[i]->size()) {
       return 0;
     }
@@ -623,8 +637,7 @@ public:
     c_ranks_[chars_index_[c]][i][j] = rank_c;
     return rank_c;
   }
-  size_type
-  part_rank_block(input_type c, size_type i, size_type j, size_type g) {
+  size_type part_rank_block(uint8_t c, size_type i, size_type j, size_type g) {
     if (static_cast<uint64_t>(j) >= block_tree_types_[i]->size()) {
       return 0;
     }
@@ -670,7 +683,7 @@ public:
     }
     return rank_c;
   }
-  size_type rank_leaf(input_type c, size_type leaf_index, size_type i) {
+  size_type rank_leaf(uint8_t c, size_type leaf_index, size_type i) {
     if (static_cast<uint64_t>(leaf_index * leaf_size) >=
         compressed_leaves_.size()) {
       return 0;
@@ -687,9 +700,9 @@ public:
     return result;
   }
 
-  size_type map_unique_chars(const std::vector<input_type>& text) {
+  size_type map_unique_chars(const std::vector<uint8_t>& text) {
     this->u_chars_ = 0;
-    input_type i = 0;
+    uint8_t i = 0;
     for (auto a : text) {
       if (chars_index_.find(a) == chars_index_.end()) {
         chars_index_[a] = i;

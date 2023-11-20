@@ -40,9 +40,9 @@ option(PASTA_BLOCK_TREE_BENCH
         "Enable outputting benchmark information" OFF)
 
 include(ExternalProject)
+include(FetchContent)
 # Optional test
 if (PASTA_BLOCK_TREE_BUILD_TESTS)
-    include(FetchContent)
     FetchContent_Declare(
             googletest
             GIT_REPOSITORY https://github.com/google/googletest.git
@@ -74,29 +74,21 @@ if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
         target_compile_definitions(build_bt PRIVATE BT_BENCH)
         #target_compile_definitions(build_bt PRIVATE ROBIN_HOOD_LOG_ENABLED)
     endif ()
-
-    if (PASTA_BLOCK_TREE_MALLOC_COUNT)
-        message(DEBUG "malloc_count enabled")
-        # malloc_count
-        ExternalProject_Add(malloc_count
-                PREFIX ${CMAKE_CURRENT_BINARY_DIR}
-                GIT_REPOSITORY git@github.com:Skadic/malloc_count.git
-                BUILD_COMMAND gcc -c -fpic -ldl ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count/malloc_count.c
-                CONFIGURE_COMMAND ""
-                INSTALL_COMMAND ""
-        )
-
-        add_library(libmalloc_count INTERFACE)
-        target_include_directories(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
-        target_link_libraries(libmalloc_count INTERFACE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count-build/malloc_count.o)
-
-        target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/extlib/malloc_count)
-        target_include_directories(build_bt PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src/malloc_count)
-        #target_link_libraries(build_bt libmalloc_count)
-        #target_compile_definitions(build_bt PRIVATE BT_MALLOC_COUNT)
-    endif ()
-
 endif ()
+
+set(ZSTD_BUILD_STATIC ON)
+set(ZSTD_BUILD_SHARED OFF)
+
+FetchContent_Declare(
+        zstd
+        URL "https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz"
+        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+        SOURCE_SUBDIR build/cmake
+)
+
+FetchContent_MakeAvailable(zstd)
+set_target_properties(libzstd_static PROPERTIES COMPILE_FLAGS "-w")
+
 
 set(LIBSAIS_USE_OPENMP ON CACHE BOOL "Use OpenMP for parallelization of libsais" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
@@ -119,11 +111,6 @@ add_library(jiffy1 INTERFACE)
 target_include_directories(jiffy1 INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/Jiffy-1)
 
-add_library(bbhash STATIC ${CMAKE_CURRENT_SOURCE_DIR}/extlib/BBHash/example.cpp)
-target_include_directories(bbhash SYSTEM PUBLIC
-        ${CMAKE_CURRENT_SOURCE_DIR}/extlib/BBHash)
-set_target_properties(bbhash PROPERTIES COMPILE_FLAGS "-w")
-
 add_library(pasta_block_tree INTERFACE)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -145,8 +132,9 @@ target_link_libraries(pasta_block_tree INTERFACE
         waitfree-mpsc-queue
         sdsl
         #jiffy
-        bbhash
-        jiffy1)
+        jiffy1
+        libzstd_static)
+
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/growt)
 target_include_directories(pasta_block_tree INTERFACE

@@ -21,17 +21,12 @@
 #pragma once
 
 #include "pasta/bit_vector/bit_vector.hpp"
-#include "pasta/block_tree/block_tree.hpp"
+#include "pasta/block_tree/bit_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunknown-pragmas"
-#pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
-#include <BooPHF.h>
-#pragma GCC diagnostic pop
-
+#include <ankerl/unordered_dense.h>
 #include <atomic>
 #include <concepts>
 #include <list>
@@ -46,16 +41,58 @@ __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
 
+/// @brief Determine whether to use a Rabin-Karp hash for hashing text windows
+/// or just use the block's content itself as a hash, stored in an integer.
+enum class UseHash {
+  /// @brief Use a Rabin-Karp hash
+  RABIN_KARP,
+  /// @brief Use the block's content as a hash
+  IDENTITY
+};
+
 /// @brief A parallel block tree construction algorithm using Rabin-Karp hashes
-///   and a sharded hash map.
-/// @tparam input_type The type of the characters in the input string
+///   and a sharded hash map. Small blocks are not RK-hashed but rather use the
+///   blocks themselves.
 /// @tparam size_type The type used for indices etc. (must be a signed integer)
-/// @tparam queue_type The type of queue to use for communication
 ///   in the sharded hash map.
-template <std::integral input_type, std::signed_integral size_type>
-class BlockTreeFPParPHF : public BlockTree<input_type, size_type> {
+template <std::signed_integral size_type>
+class BitBlockTreeSharded : public BitBlockTree<size_type> {
   using Clock = std::chrono::high_resolution_clock;
   using TimePoint = Clock::time_point;
+
+  /// @brief For some block size (in bytes) i, return the number of trailing
+  ///   zeros in a 64 bit integer when zeroing out characters that are not part
+  ///   of the block.
+  constexpr static uint64_t MASK_TRAILING_ZEROS[9] =
+      {64, 56, 48, 40, 32, 24, 16, 8, 0};
+
+  /// @brief Masks used for the identity hash. These depend on endianness
+  constexpr static std::array<uint64_t, 9> masks() {
+    if constexpr (std::endian::native == std::endian::big) {
+      return {0,
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[1],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[2],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[3],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[4],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[5],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[6],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[7],
+              static_cast<uint64_t>(~0) << MASK_TRAILING_ZEROS[8]};
+    } else {
+      return {0,
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[1],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[2],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[3],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[4],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[5],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[6],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[7],
+              static_cast<uint64_t>(~0) >> MASK_TRAILING_ZEROS[8]};
+    }
+  }
+
+  /// @brief Masks for identity hashes for a block size i (in bytes)
+  constexpr static std::array<uint64_t, 9> HASH_MASKS = masks();
 
   /// @brief A marker for a block that has no earlier occurrence
   constexpr static size_type NO_EARLIER_OCC = -1;
@@ -64,10 +101,13 @@ class BlockTreeFPParPHF : public BlockTree<input_type, size_type> {
 
   /// @brief Base of the polynomial used for the Rabin-Karp hasher
   constexpr static size_type SIGMA = 256;
-  /// @brief A mersenne prime used for the Rabin-Karp hasher
-  constexpr static uint128_t PRIME = 2305843009213693951ULL;
+
   /// @brief The exponent of the mersenne prime used for the Rabin-Karp hasher
-  constexpr static uint8_t PRIME_EXPONENT = 61;
+  constexpr static uint8_t PRIME_EXPONENT = 107;
+  // constexpr static uint8_t PRIME_EXPONENT = 89;
+  //  constexpr static uint8_t PRIME_EXPONENT = 61;
+  /// @brief A mersenne prime used for the Rabin-Karp hasher
+  constexpr static uint128_t PRIME = pasta::primer<PRIME_EXPONENT>();
 
   /// @brief A bit vector
   using BitVector = pasta::BitVector;
@@ -77,19 +117,35 @@ class BlockTreeFPParPHF : public BlockTree<input_type, size_type> {
   /// @brief A sequential hash map used as backing for the sharded hash map.
   template <typename key_type, typename value_type>
   using SeqHashMap =
-      robin_hood::unordered_map<key_type, value_type, std::hash<key_type>>;
+      ankerl::unordered_dense::map<key_type, value_type, std::hash<key_type>>;
+  // robin_hood::unordered_flat_map<key_type, value_type,
+  // std::hash<key_type>>;
+  // std::unordered_map<key_type, value_type, std::hash<key_type>>;
 
   /// @brief A rabin karp hasher preconfigured for the current template
   ///   parameters
-  using RabinKarp = MersenneRabinKarp<input_type, size_type, PRIME_EXPONENT>;
+  using RabinKarp = MersenneRabinKarp<uint8_t, size_type, PRIME_EXPONENT>;
   /// @brief A rabin karp hash for the preconfigured rabin karp hasher
-  using RabinKarpHash = MersenneHash<input_type>;
+  using RabinKarpHash = MersenneHash<uint8_t>;
 
   /// @brief A hash map with rabin karp hashes as keys
   template <typename value_type,
-            UpdateFunction<RabinKarpHash, value_type> update_fn_type>
+            UpdateFunction<RabinKarpHash, value_type> update_fn_type,
+            template <typename, typename> typename seq_map_type = SeqHashMap>
   using RabinKarpMap =
-      SyncShardedMap<RabinKarpHash, value_type, SeqHashMap, update_fn_type>;
+      SyncShardedMap<RabinKarpHash, value_type, seq_map_type, update_fn_type>;
+
+#define MIX
+  static uint64_t mix_select(uint64_t key) {
+#ifdef MIX
+    key ^= (key >> 31);
+    key *= 0x7fb5d329728ea185;
+    key ^= (key >> 27);
+    key *= 0x81dadef4bc2dd44d;
+    key ^= (key >> 33);
+#endif
+    return key;
+  }
 
 #ifdef BT_INSTRUMENT
 public:
@@ -120,16 +176,16 @@ private:
     /// @brief Block start indices
     std::unique_ptr<std::vector<size_type>> block_starts;
     /// @brief The block size on this level
-    size_type block_size;
-    /// @brief The index of the current level. First level is 0, second level is
-    ///   1 etc.
-    size_type level_index;
+    int64_t block_size;
+    /// @brief The index of the current level.
+    /// First level is 0, second level is 1 etc.
+    int64_t level_index;
     /// @brief The number of blocks on the current level
-    size_type num_blocks;
+    int64_t num_blocks;
 
-    inline LevelData(size_type level_index_,
-                     size_type block_size_,
-                     size_type num_blocks_)
+    LevelData(const int64_t level_index_,
+              const int64_t block_size_,
+              const int64_t num_blocks_)
         : is_internal(nullptr),
           is_internal_rank(nullptr),
           pointers(new std::vector<size_type>()),
@@ -142,9 +198,8 @@ private:
 
     /// @brief Checks whether a block is adjacent in the text
     ///   to its successor on this level
-    [[nodiscard]] inline bool next_is_adjacent(size_t i) const {
-      return (*block_starts)[i] + static_cast<size_type>(block_size) ==
-             (*block_starts)[i + 1];
+    [[nodiscard]] bool next_is_adjacent(size_t i) const {
+      return (*block_starts)[i] + block_size == (*block_starts)[i + 1];
     }
   };
 
@@ -160,15 +215,6 @@ private:
     /// another thread tries to access the vector during reallocation.
     std::list<size_type> occurrences;
 
-    inline PairOccurrences()
-        : first_occ_block{std::numeric_limits<size_type>::max()},
-          occurrences{} {}
-
-    bool operator==(const PairOccurrences& other) const {
-      return first_occ_block == other.first_occ_block &&
-             occurrences == other.occurrences;
-    };
-
     /// @brief Initialize the occurrences of a hashed block pair.
     ///
     /// Note, that this only sets the first occurrence to the given block index,
@@ -178,20 +224,19 @@ private:
         : first_occ_block(first_occ_block_),
           occurrences() {}
 
+    PairOccurrences(PairOccurrences&&) noexcept = default;
+    PairOccurrences& operator=(PairOccurrences&&) = default;
+
     /// @brief Add a block index to the occurrences.
     /// @param block_index The block index to add to the occurrences.
-    [[gnu::noinline]] inline void add_block_pair(size_type block_index) {
+    void add_block_pair(size_type block_index) {
       occurrences.push_back(block_index);
     }
 
     /// @brief If the given block index is an earlier occurrence, update it
     /// @param block_index The block index of an occurrence
-    [[gnu::noinline]] void update(size_type block_index) {
+    void update(size_type block_index) {
       first_occ_block = std::min<size_type>(first_occ_block, block_index);
-    }
-
-    void invalidate() {
-      first_occ_block = std::numeric_limits<decltype(first_occ_block)>::max();
     }
   };
 
@@ -235,18 +280,25 @@ private:
         : first_occ(other.first_occ.load()),
           occurrences(std::move(other.occurrences)) {}
 
+    ~BlockOccurrences() = default;
+
+    BlockOccurrences& operator=(BlockOccurrences&& other) noexcept {
+      first_occ = other.first_occ.load();
+      occurrences = std::move(other.occurrences);
+      return *this;
+    }
+
     /// @brief Add a block index to the occurrences.
     /// @param block_index The block index to add to the occurrences.
-    [[gnu::noinline]] inline void add_block(size_type block_index) {
+    void add_block(size_type block_index) {
       occurrences.push_back(block_index);
     }
 
     /// @brief If the given block index and offset are an earlier occurrence,
     ///   update them
     /// @param block_index The block index of an occurrence
-    /// @param block_index The offset of that occurrence
-    [[gnu::noinline]] inline void update(size_type block_index,
-                                         size_type block_offset) {
+    /// @param block_offset The offset of that occurrence
+    void update(size_type block_index, size_type block_offset) {
       FirstOccurrence prev_first_occ = this->first_occ.load();
       FirstOccurrence set(block_index, block_offset);
       while (block_index < prev_first_occ.block &&
@@ -322,7 +374,10 @@ private:
 
   /// @brief Constructs the block tree.
   /// @param text The input text.
-  void construct(const std::vector<input_type>& text,
+  /// @param threads The number of threads to use for construction
+  /// @param queue_size The max number of items in each thread's queue for its
+  /// hash map
+  void construct(const std::span<const uint8_t> text,
                  const size_t threads,
                  const size_t queue_size) {
 #ifdef BT_INSTRUMENT
@@ -386,14 +441,38 @@ private:
       TimePoint now = Clock::now();
 #endif
       LevelData& current = levels.back();
-      scan_block_pairs(text, current, is_padded, threads, queue_size);
+      if (2 * static_cast<uint64_t>(current.block_size) > 8) {
+        scan_block_pairs<UseHash::RABIN_KARP>(text,
+                                              current,
+                                              is_padded,
+                                              threads,
+                                              queue_size);
+      } else {
+        scan_block_pairs<UseHash::IDENTITY>(text,
+                                            current,
+                                            is_padded,
+                                            threads,
+                                            queue_size);
+      }
 #ifdef BT_INSTRUMENT
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
       now = Clock::now();
 #endif
-      scan_blocks(text, current, is_padded, threads, queue_size);
+      if (static_cast<uint64_t>(current.block_size) > 8) {
+        scan_blocks<UseHash::RABIN_KARP>(text,
+                                         current,
+                                         is_padded,
+                                         threads,
+                                         queue_size);
+      } else {
+        scan_blocks<UseHash::IDENTITY>(text,
+                                       current,
+                                       is_padded,
+                                       threads,
+                                       queue_size);
+      }
 #ifdef BT_INSTRUMENT
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
@@ -472,9 +551,10 @@ private:
     return 1 + ((x - 1) / y);
   }
 
-  [[maybe_unused]] void print_aggregate(const char* name,
-                                        const tlx::Aggregate<size_t>& agg,
-                                        size_t div = 1) {
+  [[maybe_unused]] static void
+  print_aggregate(const char* name,
+                  const tlx::Aggregate<size_t>& agg,
+                  const size_t div = 1) {
     printf("%s -> min: %10u, max: %10u, avg: %10.2f, dev: %10.2f, #: %10u\n",
            name,
            static_cast<unsigned int>(agg.min() / div),
@@ -484,17 +564,6 @@ private:
            static_cast<unsigned int>(agg.count()));
   }
 
-  struct SHash {
-    uint64_t operator()(const uint64_t& key,
-                        uint64_t = 0xAAAAAAAA55555555ULL) const {
-      return key;
-    }
-  };
-
-  // using hasher_t = boomphf::SingleHashFunctor<uint64_t>;
-  using hasher_t = SHash;
-  using phf_t = boomphf::mphf<uint64_t, hasher_t>;
-
   /// @brief Scan through the blocks pairwise in order to identify which blocks
   /// should be replaced with back blocks.
   ///
@@ -502,9 +571,15 @@ private:
   /// @param level The data for the current level.
   /// @param is_padded `true` iff the last block on this level *does not* end at
   ///   the exact end of the text.
+  /// @param threads Number of threads to use
+  /// @param queue_size The size of the queue to use per thread in the sharded
+  ///   hash map.
+  /// @tparam use_hash Whether to use a Rabin-Karp hasher to hash substrings or
+  ///   use the blocks' contents themselves as hashes.
+  ///   For block sizes greater than 4 bytes, use Rabin-Karp.
   ///
-  /// @return The block start indices for the next level of the tree
-  void scan_block_pairs(const std::vector<input_type>& text,
+  template <UseHash use_hash = UseHash::RABIN_KARP>
+  void scan_block_pairs(const std::span<const uint8_t> text,
                         LevelData& level,
                         const bool is_padded,
                         const size_t threads,
@@ -518,23 +593,10 @@ private:
     // A map containing hashed block pairs mapped to their indices of the
     // pairs' first block respectively
     BlockPairMap map(threads, queue_size);
-    std::vector<uint64_t> hashes(level.num_blocks - 1 - is_padded);
-    std::vector<std::pair<uint64_t, uint64_t>> values(level.num_blocks - 1 -
-                                                      is_padded);
-    hashes.resize(level.num_blocks - 1 - is_padded,
-                  std::numeric_limits<uint64_t>::max());
-    values.resize(level.num_blocks - 1 - is_padded,
-                  {std::numeric_limits<uint64_t>::max(),
-                   std::numeric_limits<uint64_t>::max()});
-
-    std::vector<PairOccurrences> table;
 
     std::atomic_size_t threads_done = 0;
     std::atomic_bool last_done = false;
     auto& barrier = map.barrier();
-
-    phf_t* phf;
-
 #ifdef BT_INSTRUMENT
     TimePoint now = Clock::now();
     tlx::Aggregate<size_t> scan_hits;
@@ -558,11 +620,7 @@ private:
                  handle_queue_ns,                                              \
                  scan_hits,                                                    \
                  threads,                                                      \
-                 std::cout,                                                    \
-                 hashes,                                                       \
-                 values,                                                       \
-                 phf,                                                          \
-                 table)
+                 std::cout)
 #else
 #  pragma omp parallel default(none) num_threads(threads)                      \
       shared(level, map, text, is_padded, threads_done, last_done, barrier)
@@ -578,7 +636,7 @@ private:
 
       // Hash every window and determine for all block pairs whether
       // they have previous occurrences.
-      size_t segment_size =
+      const size_t segment_size =
           std::max<size_t>(1, ceil_div(num_block_pairs, num_threads));
 
       // Start and end index of the current thread's segment
@@ -586,21 +644,51 @@ private:
       const auto end =
           std::min<size_t>(num_block_pairs, (thread_id + 1) * segment_size);
 
-      RabinKarp rk(text, SIGMA, block_starts[0], pair_size, PRIME);
-      for (size_t i = start; i < end; ++i) {
-        // If the next block is not adjacent, we cannot hash the pair
-        // starting at the current block
-        if (!level.next_is_adjacent(i)) {
-          continue;
+      if constexpr (use_hash == UseHash::RABIN_KARP) {
+        RabinKarp rk(text, SIGMA, block_starts[0], pair_size, PRIME);
+        for (size_t i = start; i < end; ++i) {
+          // If the next block is not adjacent, we cannot hash the pair
+          // starting at the current block
+          if (!level.next_is_adjacent(i)) {
+            continue;
+          }
+          rk.restart(block_starts[i]);
+          // Move the hasher to the current block pair
+          RabinKarpHash hash = rk.current_hash();
+          // Try to find the hash in the map, insert a new entry if it
+          // doesn't exist, and add the current block to the entry
+          shard.insert(hash, i);
         }
-        rk.restart(block_starts[i]);
-        // Move the hasher to the current block pair
-        RabinKarpHash hash = rk.current_hash();
-        // Try to find the hash in the map, insert a new entry if it
-        // doesn't exist, and add the current block to the entry
-        hashes[i] = hash.hash_;
-        values[i] = {hash.hash_, i};
+      } else {
+        const uint64_t HASH_MASK = HASH_MASKS[pair_size];
+        for (size_t i = start; i < end; ++i) {
+          const size_t block_start = block_starts[i];
+          const uint8_t* block_start_ptr = text.data() + block_start;
+          const uint64_t hash_value =
+              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+          RabinKarpHash hash(text,
+                             mix_select(hash_value),
+                             block_start,
+                             block_size);
+          // Try to find the hash in the map, insert a new entry if it
+          // doesn't exist, and add the current block to the entry
+          shard.insert(hash, i);
+        }
       }
+
+      if (const size_t thread_order =
+              threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+          thread_order == num_threads) {
+        last_done.store(true, std::memory_order_release);
+      }
+
+      // Now, we handle the queue asynchronously
+      while (!last_done.load(std::memory_order::acquire)) {
+        shard.handle_queue_sync(false);
+      }
+      barrier.arrive_and_drop();
+
+      shard.handle_queue();
 #pragma omp barrier
 #pragma omp single
 #ifdef BT_INSTRUMENT
@@ -617,70 +705,43 @@ private:
       }
 #endif
 
-#pragma omp single
-      {
-        std::sort(hashes.begin(), hashes.end());
-        size_t num_distinct = 1;
-        {
-          uint64_t last = hashes[0];
-          for (size_t i = 1; i < hashes.size(); ++i) {
-            if (hashes[i] > last) {
-              hashes[num_distinct++] = hashes[i];
-              last = hashes[i];
-            }
-          }
-        }
-        values.resize(num_distinct);
-        phf = new boomphf::mphf<uint64_t, hasher_t>(num_distinct,
-                                                    hashes,
-                                                    1,
-                                                    3.0,
-                                                    false,
-                                                    false,
-                                                    0.1);
-        // std::cout << "number keys for level " << level.level_index << ": "
-        //           << phf->nbKeys() << " while num_distinct is " <<
-        //           num_distinct
-        //           << std::endl;
-        table.resize(phf->nbKeys() + 1, PairOccurrences());
-
-        // TODO Could be parallel
-        for (auto& [hash, occ] : values) {
-          if (hash == std::numeric_limits<uint64_t>::max()) {
-            continue;
-          }
-          volatile uint64_t pos = phf->lookup(hash);
-          if (pos >= table.size()) {
-            table.resize(pos + 1, PairOccurrences());
-          }
-          PairOccurrences& occs = table[pos];
-          // std::cout << "yo hash " << hash << " occ " << occ << " -> " << pos
-          // << std::endl;
-          occs.add_block_pair(occ);
-          occs.update(occ);
-        }
-      }
-#pragma omp barrier
-
       if (start < static_cast<size_t>(num_block_pairs)) {
-        RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
-        for (size_t i = start; i < end; ++i) {
-          if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
-            continue;
-          }
-          if (block_starts[i] != static_cast<size_type>(rk.init_)) {
-            rk.restart(block_starts[i]);
-          }
-          scan_windows_in_block_pair(rk,
-                                     {table},
-                                     *phf,
-                                     block_size,
-                                     i
+        if constexpr (use_hash == UseHash::RABIN_KARP) {
+          RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
+          for (size_t i = start; i < end; ++i) {
+            if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
+              continue;
+            }
+            if (block_starts[i] != static_cast<size_type>(rk.init_)) {
+              rk.restart(block_starts[i]);
+            }
+            scan_windows_in_block_pair(rk,
+                                       map,
+                                       block_size,
+                                       i
 #ifdef BT_INSTRUMENT
-                                     ,
-                                     thread_scan_hits
+                                       ,
+                                       thread_scan_hits
 #endif
-          );
+            );
+          }
+        } else {
+          for (size_t i = start; i < end; ++i) {
+            if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
+              continue;
+            }
+            scan_windows_in_block_pair_identity(text,
+                                                block_starts[i],
+                                                pair_size,
+                                                map,
+                                                block_size,
+                                                i
+#ifdef BT_INSTRUMENT
+                                                ,
+                                                thread_scan_hits
+#endif
+            );
+          }
         }
       }
 
@@ -721,9 +782,8 @@ private:
 #endif
 
     level.is_internal = std::make_unique<BitVector>(level.num_blocks);
-    fill_is_internal(*level.is_internal, std::span(table));
+    fill_is_internal(*level.is_internal, map);
     level.is_internal_rank = std::make_unique<Rank>(*level.is_internal);
-    delete phf;
   }
 
   /// @brief Fills the bit vector `is_internal` based on the values in the
@@ -732,8 +792,7 @@ private:
   ///   this level.
   /// @param map A map, mapping hashed block pairs to their first occurrence's
   ///   block index.
-  void fill_is_internal(BitVector& is_internal,
-                        std::span<PairOccurrences> map) {
+  void fill_is_internal(BitVector& is_internal, BlockPairMap& map) {
     const size_type num_blocks = is_internal.size();
 #ifdef BT_INSTRUMENT
     TimePoint now = Clock::now();
@@ -744,17 +803,15 @@ private:
     // occurrence. The LSB is 1 iff the block and its predecessor
     // have a prior occurrence.
     sdsl::int_vector<2> markings(num_blocks, 0);
-    for (const PairOccurrences& pair_occs : map) {
-      if (pair_occs.first_occ_block == ~0) {
-        continue;
-      }
-      for (const size_type occ : pair_occs.occurrences) {
-        if (pair_occs.first_occ_block < occ) {
-          markings[occ] = markings[occ] | 0b10;
-          markings[occ + 1] = markings[occ + 1] | 0b01;
-        }
-      }
-    }
+    map.for_each(
+        [&markings](const RabinKarpHash&, const PairOccurrences& pair_occs) {
+          for (const size_type occ : pair_occs.occurrences) {
+            if (pair_occs.first_occ_block < occ) {
+              markings[occ] = markings[occ] | 0b10;
+              markings[occ + 1] = markings[occ + 1] | 0b01;
+            }
+          }
+        });
 #ifdef BT_INSTRUMENT
     bp_markings_ns +=
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
@@ -789,8 +846,7 @@ private:
   ///   hashed.
   static inline void
   scan_windows_in_block_pair(RabinKarp& rk,
-                             std::span<PairOccurrences> map,
-                             phf_t& phf,
+                             BlockPairMap& map,
                              const size_t num_iterations,
                              const size_type current_block_index
 #ifdef BT_INSTRUMENT
@@ -802,10 +858,8 @@ private:
       RabinKarpHash current_hash = rk.current_hash();
       // Find the hash of the current window among the hashed block
       // pairs.
-      const uint64_t idx = phf.lookup(current_hash.hash_);
-      PairOccurrences* occurrences;
-      if (idx >= map.size() ||
-          (occurrences = &map[idx])->first_occ_block == ~0) {
+      auto found = map.find(current_hash);
+      if (found == map.end()) {
 #ifdef BT_INSTRUMENT
         agg.add(0);
         continue;
@@ -815,18 +869,65 @@ private:
         continue;
 #endif
       }
-      occurrences->update(current_block_index);
+      PairOccurrences& occurrences = found->second;
+      occurrences.update(current_block_index);
+    }
+  }
+
+  static inline void
+  scan_windows_in_block_pair_identity(const std::span<const uint8_t>& text,
+                                      const size_t block_start,
+                                      const size_t pair_size,
+                                      BlockPairMap& map,
+                                      const size_t num_iterations,
+                                      const size_type current_block_index
+#ifdef BT_INSTRUMENT
+                                      ,
+                                      tlx::Aggregate<size_t>& agg
+#endif
+  ) {
+    const uint64_t HASH_MASK = HASH_MASKS[pair_size];
+    const uint8_t* block_start_ptr = text.data() + block_start;
+    for (size_t offset = 0; offset < num_iterations; ++offset) {
+      const uint64_t hash_value =
+          (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
+           HASH_MASK);
+      RabinKarpHash current_hash(text,
+                                 mix_select(hash_value),
+                                 block_start + offset,
+                                 pair_size);
+      // Find the hash of the current window among the hashed block
+      // pairs.
+      auto found = map.find(current_hash);
+      if (found == map.end()) {
+#ifdef BT_INSTRUMENT
+        agg.add(0);
+        continue;
+      } else {
+        agg.add(100);
+#else
+        continue;
+#endif
+      }
+      PairOccurrences& occurrences = found->second;
+      occurrences.update(current_block_index);
     }
   }
 
   /// @brief Determine the positions for each block's earliest occurrence if
   /// there is any.
   ///
-  /// @param s The input text
+  /// @param text The input text
   /// @param level_data The data for the current level
   /// @param is_padded true, iff the last block of the level extends past the
   ///   end of the text
-  void scan_blocks(const std::vector<input_type>& text,
+  /// @param threads The number of threads to use during construction.
+  /// @param queue_size The max number of items in each thread's queues.
+  /// @tparam use_hash Determines whether to use a rabin karp hash for hashing
+  /// text windows or to use the block's content as a hash. For any window size
+  /// greater than 8 bytes, use Rabin-Karp.
+  template <UseHash use_hash = UseHash::RABIN_KARP>
+  void scan_blocks(std::span<const uint8_t> text,
                    LevelData& level_data,
                    const bool is_padded,
                    const size_t threads,
@@ -894,19 +995,33 @@ private:
       const size_t end = std::min<size_t>(num_total_iterations,
                                           (thread_id + 1) * segment_size);
 
-      RabinKarp rk(text, SIGMA, block_starts[0], block_size, PRIME);
       // Hash each block and store their hashes in the map
-      for (size_t i = start; i < end; ++i) {
-        rk.restart(block_starts[i]);
-        RabinKarpHash hash = rk.current_hash();
-        shard.insert(hash, {i, 0});
+      if constexpr (use_hash == UseHash::RABIN_KARP) {
+        RabinKarp rk(text, SIGMA, block_starts[0], block_size, PRIME);
+        for (size_t i = start; i < end; ++i) {
+          rk.restart(block_starts[i]);
+          RabinKarpHash hash = rk.current_hash();
+          shard.insert(hash, {i, 0});
+        }
+      } else {
+        const uint64_t HASH_MASK = HASH_MASKS[block_size];
+        for (size_t i = start; i < end; ++i) {
+          const size_t block_start = block_starts[i];
+          const uint8_t* block_start_ptr = text.data() + block_start;
+          const uint64_t hash_value =
+              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+          RabinKarpHash hash(text,
+                             mix_select(hash_value),
+                             block_start,
+                             block_size);
+
+          shard.insert(hash, {i, 0});
+        }
       }
-      const size_t thread_order =
-          num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
 
-      const bool is_last_thread = thread_order == num_threads;
-
-      if (is_last_thread) {
+      if (const size_t thread_order =
+              num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+          thread_order == num_threads) {
         last_done.store(true, std::memory_order_release);
       }
 
@@ -935,23 +1050,41 @@ private:
       // Hash every window and find the first occurrences for every
       // block.
       if (start < block_starts.size() - is_padded) {
-        RabinKarp rk(text, SIGMA, block_starts[start], block_size, PRIME);
-        for (size_t i = start; i < end; ++i) {
-          if (!level_data.next_is_adjacent(i)) {
-            continue;
-          }
-          if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
-            rk.restart(block_starts[i]);
-          }
-          scan_windows_in_block(rk,
-                                links,
-                                level_data,
-                                i
+        if constexpr (use_hash == UseHash::RABIN_KARP) {
+          RabinKarp rk(text, SIGMA, block_starts[start], block_size, PRIME);
+          for (size_t i = start; i < end; ++i) {
+            if (!level_data.next_is_adjacent(i)) {
+              continue;
+            }
+            if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
+              rk.restart(block_starts[i]);
+            }
+            scan_windows_in_block(rk,
+                                  links,
+                                  level_data,
+                                  i
 #ifdef BT_INSTRUMENT
-                                ,
-                                thread_scan_hits
+                                  ,
+                                  thread_scan_hits
 #endif
-          );
+            );
+          }
+        } else {
+          for (size_t i = start; i < end; ++i) {
+            if (!level_data.next_is_adjacent(i)) {
+              continue;
+            }
+            scan_windows_in_block_identity(text,
+                                           block_starts[i],
+                                           links,
+                                           level_data,
+                                           i
+#ifdef BT_INSTRUMENT
+                                           ,
+                                           thread_scan_hits
+#endif
+            );
+          }
         }
       }
 #ifdef BT_INSTRUMENT
@@ -1039,7 +1172,45 @@ private:
   ) {
     for (size_type offset = 0; offset < level_data.block_size;
          ++offset, rk.next()) {
-      const RabinKarpHash hash = rk.current_hash();
+      RabinKarpHash hash = rk.current_hash();
+      // Find all blocks in the multimap that match our hash
+      auto found = links.find(hash);
+      if (found == links.end()) {
+#ifdef BT_INSTRUMENT
+        hits.add(0.0);
+        continue;
+      } else {
+        hits.add(100.0);
+#else
+        continue;
+#endif
+      }
+      BlockOccurrences& occurrences = found->second;
+      occurrences.update(current_block_index, offset);
+    }
+  }
+
+  static void
+  scan_windows_in_block_identity(const std::span<const uint8_t>& text,
+                                 const size_t block_start,
+                                 BlockMap& links,
+                                 LevelData& level_data,
+                                 const size_type current_block_index
+#ifdef BT_INSTRUMENT
+                                 ,
+                                 tlx::Aggregate<size_t>& hits
+#endif
+  ) {
+    const uint64_t HASH_MASK = HASH_MASKS[level_data.block_size];
+    const uint8_t* block_start_ptr = text.data() + block_start;
+    for (size_type offset = 0; offset < level_data.block_size; ++offset) {
+      const uint64_t hash_value =
+          (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
+           HASH_MASK);
+      RabinKarpHash hash(text,
+                         mix_select(hash_value),
+                         block_start + offset,
+                         level_data.block_size);
       // Find all blocks in the multimap that match our hash
       auto found = links.find(hash);
       if (found == links.end()) {
@@ -1067,7 +1238,7 @@ private:
   /// @param level The level data of the current level.
   /// @return The level data of the next level.
   [[nodiscard]] LevelData
-  generate_next_level(const std::vector<input_type>& text,
+  generate_next_level(const std::span<const uint8_t> text,
                       const LevelData& level) const {
     const size_t block_size = level.block_size;
     const size_t num_blocks = level.num_blocks;
@@ -1107,9 +1278,9 @@ private:
   /// @param[in] levels A vector containing data for each level, with the
   /// first entry corresponding to the topmost level.
   ///
-  void make_tree(const std::vector<input_type>& text,
+  void make_tree(const std::span<const uint8_t> text,
                  std::vector<LevelData>& levels,
-                 int64_t padding) {
+                 const int64_t padding) {
     const bool is_padded = padding > 0;
 
     // Count the current number of internal blocks per level
@@ -1118,7 +1289,7 @@ private:
       for (size_t block = 0; block < levels[level].is_internal->size();
            block++) {
         if ((*levels[level].is_internal)[block]) {
-          new_num_internal[level]++;
+          ++new_num_internal[level];
         }
       }
     }
@@ -1281,7 +1452,7 @@ private:
 
       (*pointers)[num_back_blocks] = ptr - prefix_pruned_blocks[ptr];
       (*offsets)[num_back_blocks] = offset;
-      num_back_blocks++;
+      ++num_back_blocks;
     }
 
     sdsl::util::bit_compress(*pointers);
@@ -1395,11 +1566,12 @@ private:
   }
 
 public:
-  BlockTreeFPParPHF(const std::vector<input_type>& text,
-                    const size_t arity,
-                    const size_t root_arity,
-                    const size_t max_leaf_length,
-                    const size_t threads) {
+  BitBlockTreeSharded(const pasta::BitVector& text,
+                      const size_t arity,
+                      const size_t root_arity,
+                      const size_t max_leaf_length,
+                      const size_t threads,
+                      const size_t queue_size) {
     const auto old = omp_get_max_threads();
     const auto old_dynamic = omp_get_dynamic();
     omp_set_dynamic(0);
@@ -1407,13 +1579,15 @@ public:
     this->tau_ = arity;
     this->s_ = root_arity;
     this->max_leaf_length_ = max_leaf_length;
-    this->map_unique_chars(text);
-    construct(text, threads, 1000);
+    this->num_bits = text.size();
+    const std::span bytes(reinterpret_cast<const uint8_t*>(text.data().data()),
+                          ceil_div(text.size(), 8ULL));
+    construct(bytes, threads, queue_size);
     omp_set_dynamic(old_dynamic);
     omp_set_num_threads(old);
   }
 
-  ~BlockTreeFPParPHF() {
+  ~BitBlockTreeSharded() {
     for (auto& rank : this->block_tree_types_rs_) {
       delete rank;
     }
@@ -1428,5 +1602,4 @@ public:
     }
   }
 };
-
 } // namespace pasta
