@@ -20,7 +20,6 @@
 
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 
-#include <algorithm>
 #include <bitset>
 #include <filesystem>
 #include <fstream>
@@ -208,7 +207,7 @@ int main(int argc, char** argv) {
   size_t leaf_length = 0;
   cp.add_param_size_t(
       "leaf",
-      arity,
+      leaf_length,
       "The maximum number of characters saved verbatim per leaf block.");
 
   size_t threads = 1;
@@ -246,8 +245,6 @@ int main(int argc, char** argv) {
     return 1;
   }
 
-  std::cout << one_chars << std::endl;
-
 #ifdef BT_DBG
   std::cout << "building block tree with parameters:"
             << "\narity: " << arity << "\nmax leaf length: " << leaf_length
@@ -274,7 +271,7 @@ int main(int argc, char** argv) {
       } else {
         // Interpret each character as a bit
         new (&bv) pasta::BitVector(input.size());
-        std::array<bool, 256> is_one;
+        std::array<bool, 256> is_one{};
         for (char c : one_chars) {
           is_one[static_cast<uint8_t>(c)] = true;
         }
@@ -288,14 +285,14 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "RESULT algo=" << ALGO_NAME
-            << " file=" << std::filesystem::path(file).filename().string();
+            << " file=" << std::filesystem::path(file).filename().string()
+            << " threads=" << threads << " arity=" << arity
+            << " leaf_length=" << leaf_length;
   if (make_bv) {
     std::cout << " bv_size=" << bv.size();
   } else {
     std::cout << " file_size=" << text.size();
   }
-  std::cout << " threads=" << threads << " arity=" << arity
-            << " leaf_length=" << leaf_length;
   TimePoint now = Clock::now();
 
   if (make_bv) {
@@ -326,6 +323,21 @@ int main(int argc, char** argv) {
         exit(1);
       }
     }
+
+    bt->add_bit_rank_support();
+    size_t num_ones = 0;
+    for (size_t i = 0; i < bv.size(); i++) {
+      const size_t rank = bt->rank1(i);
+      if (num_ones != rank) {
+        std::osyncstream(std::cerr)
+            << "Error at position " << i << "\nExpected: " << num_ones
+            << "\nActual: " << rank << std::endl;
+        throw std::runtime_error("oof");
+      }
+
+      num_ones += bv[i];
+    }
+
   } else {
     // Make text block tree
     auto bt = make_bt(text, arity, leaf_length, threads, queue_size);

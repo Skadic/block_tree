@@ -24,6 +24,7 @@
 #include "pasta/block_tree/bit_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
+#include "pasta/block_tree/utils/byteread.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
 #include <ankerl/unordered_dense.h>
@@ -665,7 +666,7 @@ private:
           const size_t block_start = block_starts[i];
           const uint8_t* block_start_ptr = text.data() + block_start;
           const uint64_t hash_value =
-              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+              pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
           RabinKarpHash hash(text,
                              mix_select(hash_value),
                              block_start,
@@ -890,8 +891,7 @@ private:
     const uint8_t* block_start_ptr = text.data() + block_start;
     for (size_t offset = 0; offset < num_iterations; ++offset) {
       const uint64_t hash_value =
-          (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
-           HASH_MASK);
+          pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
       RabinKarpHash current_hash(text,
                                  mix_select(hash_value),
                                  block_start + offset,
@@ -1009,7 +1009,7 @@ private:
           const size_t block_start = block_starts[i];
           const uint8_t* block_start_ptr = text.data() + block_start;
           const uint64_t hash_value =
-              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+              pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
           RabinKarpHash hash(text,
                              mix_select(hash_value),
                              block_start,
@@ -1205,8 +1205,7 @@ private:
     const uint8_t* block_start_ptr = text.data() + block_start;
     for (size_type offset = 0; offset < level_data.block_size; ++offset) {
       const uint64_t hash_value =
-          (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
-           HASH_MASK);
+          pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
       RabinKarpHash hash(text,
                          mix_select(hash_value),
                          block_start + offset,
@@ -1332,8 +1331,10 @@ private:
       LevelData& previous_level = levels[level_index - 1];
       found_back_block |= static_cast<size_t>(new_num_internal[level_index]) <
                           levels[level_index].is_internal->size();
-      if (!found_back_block) {
-        level.is_internal.reset();
+      if (!found_back_block && level_index < levels.size() - 1) {
+        if (level_index < levels.size() - 1) {
+          level.is_internal.reset();
+        }
         level.is_internal_rank.reset();
         level.pointers.reset();
         level.offsets.reset();
