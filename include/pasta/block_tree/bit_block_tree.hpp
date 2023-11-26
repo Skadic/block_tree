@@ -125,6 +125,136 @@ public:
     return ((1 << bit_offset) & byte) != 0;
   };
 
+private:
+  [[nodiscard]] size_t find_initial_block(const size_t rank) const {
+    const auto& top_one_ranks = one_ranks_[0];
+    const size_t block_size = block_size_lvl_[0];
+    size_t start = (rank - 1) / (block_size * 8);
+    size_t end = top_one_ranks.size() - 1;
+    while (start != end) {
+      const size_t middle = start + (end - start) / 2;
+      const size_t current_rank = (middle == 0) ? 0 : top_one_ranks[middle - 1];
+      if (current_rank < rank) {
+        if (start + 1 == end) {
+          // If there is only one block left, it's either the current or the
+          // next block
+          if (top_one_ranks[middle] < rank) {
+            start = middle + 1;
+          }
+          break;
+        }
+        start = middle;
+      } else {
+        end = middle - 1;
+      }
+    }
+    return start;
+  }
+
+public:
+  [[nodiscard("select result discarded")]] ssize_t
+  select_one(size_t rank) const {
+    const size_t start_rank = rank;
+    const auto& top_is_internal = *block_tree_types_[0];
+    const auto& top_is_internal_rank = *block_tree_types_rs_[0];
+    const auto& top_pointers = *block_tree_pointers_[0];
+    const auto& top_offsets = *block_tree_offsets_[0];
+    const auto& top_one_ranks = one_ranks_[0];
+    size_t block_size = block_size_lvl_[0];
+
+    // Binary Search for the correct top level block containing the correct 1
+    size_t current_block = find_initial_block(rank);
+
+    size_t pos = (current_block * block_size * 8) - 1;
+    // ReSharper disable once CppDFAUnreachableCode
+    rank -= (current_block == 0) ? 0 : top_one_ranks[current_block - 1];
+
+    // If that block is a back block, we need to move to the back-pointed block
+    if (!top_is_internal[current_block]) {
+      const size_t back_block_index = top_is_internal_rank.rank0(current_block);
+      current_block = top_pointers[back_block_index];
+      const size_t offset = top_offsets[back_block_index];
+      size_t rank_d =
+          (current_block == 0) ?
+              top_one_ranks[current_block] :
+              top_one_ranks[current_block] - top_one_ranks[current_block - 1];
+      rank_d -= pointer_prefix_one_counts_[0][back_block_index];
+      if (rank > rank_d) {
+        rank -= rank_d;
+        pos += block_size - offset;
+        ++current_block;
+      } else {
+        rank += pointer_prefix_one_counts_[0][back_block_index];
+        pos -= offset;
+      }
+    }
+
+    size_t level = 1;
+    while (level < height()) {
+      const auto& pointer_ranks = pointer_prefix_one_counts_[level];
+      const auto& is_internal = *block_tree_types_[level];
+      const auto& is_internal_rank = *block_tree_types_rs_[level];
+      const auto& prev_is_internal_rank = *block_tree_types_rs_[level - 1];
+      const auto& offsets = *block_tree_offsets_[level];
+      const auto& pointers = *block_tree_pointers_[level];
+      const auto& one_ranks = one_ranks_[level];
+
+      current_block = prev_is_internal_rank.rank1(current_block) * tau_;
+      block_size /= tau_;
+      size_t k = current_block;
+      while (one_ranks[current_block] < rank) {
+        ++current_block;
+      }
+      rank -= (current_block == k) ? 0 : one_ranks[current_block - 1];
+      pos += (current_block - k) * block_size * 8;
+      if (!is_internal[current_block]) {
+        size_t back_block_index = is_internal_rank.rank0(current_block);
+        current_block = pointers[back_block_index];
+        const size_t offset = offsets[back_block_index];
+        size_t rank_d =
+            (current_block % tau_ == 0) ?
+                one_ranks[current_block] :
+                one_ranks[current_block] - one_ranks[current_block - 1];
+        rank_d -= pointer_ranks[back_block_index];
+        if (rank > rank_d) {
+          rank -= rank_d;
+          pos += (block_size - offset) * 8;
+          ++current_block;
+        } else {
+          rank += pointer_ranks[back_block_index];
+          pos -= offset * 8;
+        }
+      }
+      ++level;
+    }
+
+    current_block =
+        block_tree_types_rs_[level - 1]->rank1(current_block) * tau_;
+    size_t l = 0;
+    while (rank > 0) {
+      const uint8_t byte =
+          decompress_map_[compressed_leaves_[current_block * leaf_size +
+                                             l / 8]];
+      const uint8_t num_ones = std::popcount(byte);
+      if (rank > num_ones) {
+        rank -= num_ones;
+        l += 8;
+      } else {
+        for (uint8_t bit = 0; bit < 8 && rank > 0; ++bit) {
+          l++;
+          rank -= ((1 << bit) & byte) > 0;
+        }
+      }
+    }
+    (void)start_rank;
+    // const auto s_signed = static_cast<ssize_t>(s);
+    // std::cout << start_rank << " -> s: " << s_signed << ", l: " << l
+    //           << std::endl;
+    // return static_cast<size_t>((s_signed >= 0 ? s_signed * 8 : s_signed) +
+    // l);
+    return pos + l;
+  }
+
   int64_t select(uint8_t c, size_type j) {
     auto c_index = chars_index_[c];
     auto& top_level = *block_tree_types_[0];
