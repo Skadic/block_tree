@@ -181,11 +181,11 @@ public:
       rank_d -= pointer_prefix_one_counts_[0][back_block_index];
       if (rank > rank_d) {
         rank -= rank_d;
-        pos += block_size - offset;
+        pos += (block_size - offset) * 8;
         ++current_block;
       } else {
         rank += pointer_prefix_one_counts_[0][back_block_index];
-        pos -= offset;
+        pos -= offset * 8;
       }
     }
 
@@ -355,7 +355,8 @@ public:
   }
 
   /// @brief Counts the number of 1-bits up to (and excluding) an index.
-  size_t rank1(const size_type bit_index) const {
+  [[nodiscard("rank result discarded")]] size_t
+  rank1(const size_type bit_index) const {
     const size_t byte_index = bit_index / 8;
     const auto& top_is_internal = *block_tree_types_[0];
     const auto& top_is_internal_rank = *block_tree_types_rs_[0];

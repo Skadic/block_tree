@@ -324,13 +324,13 @@ int main(int argc, char** argv) {
         exit(1);
       }
     }
-
     bt->add_bit_rank_support();
     FlatRankSelect<> frs(bv);
 #pragma omp parallel for
     for (size_t i = 0; i < bv.size(); i++) {
       const size_t bt_rank = bt->rank1(i);
       const size_t bv_rank = frs.rank1(i);
+
       if (bv_rank != bt_rank) {
         std::osyncstream(std::cerr)
             << "Rank error at position " << i << "\nExpected: " << bv_rank
@@ -340,7 +340,6 @@ int main(int argc, char** argv) {
     }
 
     const size_t num_ones = frs.rank1(bv.size());
-    std::cout << "num ones: " << num_ones << std::endl;
 
 #pragma omp parallel for
     for (size_t i = 1; i <= num_ones; i++) {
