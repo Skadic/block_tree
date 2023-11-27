@@ -308,11 +308,12 @@ int main(int argc, char** argv) {
                        .count();
     std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
     std::cout << std::endl;
+    bt->add_bit_rank_support();
+    FlatRankSelect<> frs(bv);
 
 #if defined BT_INSTRUMENT && defined BT_DBG
     pasta::print_hash_data();
 #endif
-
 #pragma omp parallel for
     for (size_t i = 0; i < bv.size(); ++i) {
       const bool c = bt->access(i);
@@ -324,8 +325,6 @@ int main(int argc, char** argv) {
         exit(1);
       }
     }
-    bt->add_bit_rank_support();
-    FlatRankSelect<> frs(bv);
 #pragma omp parallel for
     for (size_t i = 0; i < bv.size(); i++) {
       const size_t bt_rank = bt->rank1(i);
@@ -338,16 +337,29 @@ int main(int argc, char** argv) {
         throw std::runtime_error("oof");
       }
     }
+    const size_t num_zeros = frs.rank0(bv.size());
+
+#pragma omp parallel for
+    for (size_t i = 1; i <= num_zeros; i++) {
+      const size_t bv_rank = frs.select0(i);
+      const size_t bt_rank = bt->select0(i);
+      if (bv_rank != bt_rank) {
+        std::osyncstream(std::cerr) << "Select zero error at position " << i
+                                    << "\nExpected: " << bv_rank
+                                    << "\nActual: " << bt_rank << std::endl;
+        throw std::runtime_error("oof");
+      }
+    }
 
     const size_t num_ones = frs.rank1(bv.size());
 
 #pragma omp parallel for
     for (size_t i = 1; i <= num_ones; i++) {
       const size_t bv_rank = frs.select1(i);
-      const size_t bt_rank = bt->select_one(i);
+      const size_t bt_rank = bt->select1(i);
       if (bv_rank != bt_rank) {
         std::osyncstream(std::cerr)
-            << "Select error at position " << i << "\nExpected: " << bv_rank
+            << "Select one error at position " << i << "\nExpected: " << bv_rank
             << "\nActual: " << bt_rank << std::endl;
         throw std::runtime_error("oof");
       }
