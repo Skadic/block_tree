@@ -46,8 +46,6 @@ public:
   /// tree will only contain levels 6 and below.
   bool CUT_FIRST_LEVELS = true;
 
-  using BVStoreType = pasta::BitVector::RawDataType;
-
   /// The arity of the tree
   size_type tau_;
   size_type max_leaf_length_;
@@ -74,11 +72,6 @@ public:
   std::vector<uint8_t> compress_map_;
   std::vector<uint8_t> decompress_map_;
   sdsl::int_vector<> compressed_leaves_;
-
-  ankerl::unordered_dense::map<uint8_t, size_type> chars_index_;
-  std::vector<uint8_t> chars_;
-  std::vector<std::vector<sdsl::int_vector<>>> c_ranks_;
-  std::vector<std::vector<sdsl::int_vector<>>> pointer_c_ranks_;
 
   /// @brief For each level and each block, contains the number of 1s up to (and
   /// including) the block.
@@ -166,7 +159,7 @@ private:
   }
 
 public:
-  [[nodiscard("select result discarded")]] ssize_t select1(size_t rank) const {
+  [[nodiscard("select result discarded")]] size_t select1(size_t rank) const {
     const auto& top_is_internal = *block_tree_types_[0];
     const auto& top_is_internal_rank = *block_tree_types_rs_[0];
     const auto& top_pointers = *block_tree_pointers_[0];
@@ -213,12 +206,12 @@ public:
 
       current_block = prev_is_internal_rank.rank1(current_block) * tau_;
       block_size /= tau_;
-      size_t k = current_block;
+      const size_t start_block = current_block;
       while (one_ranks[current_block] < rank) {
         ++current_block;
       }
-      rank -= (current_block == k) ? 0 : one_ranks[current_block - 1];
-      pos += (current_block - k) * block_size * 8;
+      rank -= (current_block == start_block) ? 0 : one_ranks[current_block - 1];
+      pos += (current_block - start_block) * block_size * 8;
       if (!is_internal[current_block]) {
         size_t back_block_index = is_internal_rank.rank0(current_block);
         current_block = pointers[back_block_index];
@@ -242,23 +235,24 @@ public:
 
     current_block =
         block_tree_types_rs_[level - 1]->rank1(current_block) * tau_;
-    size_t l = 0;
+    size_t byte_offset = 0;
     while (rank > 0) {
       const uint8_t byte =
           decompress_map_[compressed_leaves_[current_block * leaf_size +
-                                             l / 8]];
+                                             byte_offset]];
       const uint8_t num_ones = std::popcount(byte);
       if (rank > num_ones) {
         rank -= num_ones;
-        l += 8;
+        pos += 8;
+        ++byte_offset;
       } else {
         for (uint8_t bit = 0; bit < 8 && rank > 0; ++bit) {
-          l++;
+          pos++;
           rank -= ((1 << bit) & byte) > 0;
         }
       }
     }
-    return pos + l;
+    return pos;
   }
 
   [[nodiscard("select result discarded")]] size_t select0(size_t rank) const {
@@ -323,12 +317,12 @@ public:
         const size_t rnk = (i % this->tau_ + 1) * block_size * 8 - one_ranks[i];
         return rnk;
       };
-      const size_t k = current_block;
+      const size_t start_block = current_block;
       while (zero_ranks(current_block) < rank) {
         ++current_block;
       }
-      rank -= (current_block == k) ? 0 : zero_ranks(current_block - 1);
-      pos += (current_block - k) * block_size * 8;
+      rank -= (current_block == start_block) ? 0 : zero_ranks(current_block - 1);
+      pos += (current_block - start_block) * block_size * 8;
       if (!is_internal[current_block]) {
         size_t back_block_index = is_internal_rank.rank0(current_block);
         current_block = pointers[back_block_index];
@@ -371,105 +365,6 @@ public:
       }
     }
     return pos;
-  }
-
-  int64_t select(uint8_t c, size_type j) {
-    auto c_index = chars_index_[c];
-    auto& top_level = *block_tree_types_[0];
-
-    auto& top_level_rs = *block_tree_types_rs_[0];
-    auto& top_level_ptr = *block_tree_pointers_[0];
-    auto& top_level_off = *block_tree_offsets_[0];
-    size_type current_block = (j - 1) / block_size_lvl_[0];
-    size_type end_block = c_ranks_[c_index][0].size() - 1;
-    int64_t block_size = block_size_lvl_[0];
-    // find first level block containing the jth occurrence of c with a bin
-    // search
-    while (current_block != end_block) {
-      size_type m = current_block + (end_block - current_block) / 2;
-
-      size_type f = (m == 0) ? 0 : c_ranks_[c_index][0][m - 1];
-      if (f < j) {
-        if (end_block - current_block == 1) {
-          if (c_ranks_[c_index][0][m] < static_cast<uint64_t>(j)) {
-            current_block = m + 1;
-          }
-          break;
-        }
-        current_block = m;
-      } else {
-        end_block = m - 1;
-      }
-    }
-
-    // accumulator
-    int64_t s = current_block * block_size - 1;
-    // index that indicates how many c's are still unaccounted for
-    j -= (current_block == 0) ? 0 : c_ranks_[c_index][0][current_block - 1];
-    // we translate unmarked blocks on the top level independently as it differs
-    // from the other levels
-    if (!top_level[current_block]) {
-      int64_t blk = top_level_rs.rank0(current_block);
-      current_block = top_level_ptr[blk];
-      int64_t g = top_level_off[blk];
-      int64_t rank_d = (current_block == 0) ?
-                           c_ranks_[c_index][0][0] :
-                           c_ranks_[c_index][0][current_block] -
-                               c_ranks_[c_index][0][current_block - 1];
-      rank_d -= pointer_c_ranks_[c_index][0][blk];
-      if (rank_d < j) {
-        j -= rank_d;
-        s += (block_size - g);
-        current_block++;
-      } else {
-        j += pointer_c_ranks_[c_index][0][blk];
-        s -= g;
-      }
-    }
-    uint64_t i = 1;
-    while (i < height()) {
-      auto& current_level = *block_tree_types_[i];
-      auto& current_level_rs = *block_tree_types_rs_[i];
-      auto& current_level_ptr = *block_tree_pointers_[i];
-      auto& current_level_off = *block_tree_offsets_[i];
-      auto& prev_level_rs = *block_tree_types_rs_[i - 1];
-      current_block = prev_level_rs.rank1(current_block) * tau_;
-      block_size /= tau_;
-      int64_t k = current_block;
-      while ((int64_t)c_ranks_[c_index][i][current_block] < j) {
-        current_block++;
-      }
-      j -= (current_block == k) ? 0 : c_ranks_[c_index][i][current_block - 1];
-      s += (current_block - k) * block_size;
-      if (!current_level[current_block]) {
-        int64_t blk = current_level_rs.rank0(current_block);
-        current_block = current_level_ptr[blk];
-        int64_t g = current_level_off[blk];
-        int64_t rank_d = (current_block % tau_ == 0) ?
-                             c_ranks_[c_index][i][current_block] :
-                             c_ranks_[c_index][i][current_block] -
-                                 c_ranks_[c_index][i][current_block - 1];
-        rank_d -= pointer_c_ranks_[c_index][i][blk];
-        if (rank_d < j) {
-          j -= rank_d;
-          s += (block_size - g);
-          current_block++;
-        } else {
-          j += pointer_c_ranks_[c_index][i][blk];
-          s -= g;
-        }
-      }
-      i++;
-    }
-
-    current_block = (*block_tree_types_rs_[i - 1]).rank1(current_block) * tau_;
-    int64_t l = 0;
-    while (j > 0) {
-      if (compressed_leaves_[current_block * leaf_size + l] == compress_map_[c])
-        j--;
-      l++;
-    }
-    return s + l;
   }
 
   /// @brief Counts the number of 1-bits up to (and excluding) an index.
@@ -584,40 +479,38 @@ public:
     return bit_index - rank1(bit_index);
   }
 
-  int64_t print_space_usage() {
-    int64_t space_usage = sizeof(tau_) + sizeof(max_leaf_length_) + sizeof(s_) +
-                          sizeof(leaf_size);
-    for (auto bv : block_tree_types_) {
+  size_t print_space_usage() const {
+    size_t space_usage = sizeof(tau_) + sizeof(max_leaf_length_) + sizeof(s_) +
+                         sizeof(leaf_size);
+    for (const auto bv : block_tree_types_) {
       space_usage += bv->size() / 8;
     }
-    for (auto rs : block_tree_types_rs_) {
+    for (const auto rs : block_tree_types_rs_) {
       space_usage += rs->space_usage();
     }
     for (const auto iv : block_tree_pointers_) {
       space_usage += (int64_t)sdsl::size_in_bytes(*iv);
     }
     for (const auto iv : block_tree_offsets_) {
-      space_usage += (int64_t)sdsl::size_in_bytes(*iv);
+      space_usage += sdsl::size_in_bytes(*iv);
     }
     if (rank_support) {
-      for (auto c : chars_) {
-        int64_t sum = 0;
-        for (auto lvl : pointer_c_ranks_[chars_index_[c]]) {
-          sum += sdsl::size_in_bytes(lvl);
-        }
-        for (auto lvl : c_ranks_[chars_index_[c]]) {
-          sum += sdsl::size_in_bytes(lvl);
-        }
-        space_usage += sum;
+      for (auto v : block_size_lvl_) {
+        space_usage += sizeof(v);
+      }
+      for (auto v : block_per_lvl_) {
+        space_usage += sizeof(v);
       }
     }
 
-    for (auto v : block_size_lvl_) {
-      space_usage += sizeof(v);
+    for (auto& rs : one_ranks_) {
+      space_usage += sdsl::size_in_bytes(rs);
     }
-    for (auto v : block_per_lvl_) {
-      space_usage += sizeof(v);
+
+    for (auto& rs : pointer_prefix_one_counts_) {
+      space_usage += sdsl::size_in_bytes(rs);
     }
+
     // space_usage += leaves_.size() * sizeof(uint8_t);
     space_usage += sdsl::size_in_bytes(compressed_leaves_);
     space_usage += compress_map_.size();
@@ -666,113 +559,6 @@ public:
     }
     for (auto& ranks : one_ranks_) {
       sdsl::util::bit_compress(ranks);
-    }
-    return 0;
-  }
-
-  int32_t add_rank_support() {
-    rank_support = true;
-    c_ranks_.resize(chars_.size(), std::vector<sdsl::int_vector<0>>());
-    pointer_c_ranks_.resize(chars_.size(), std::vector<sdsl::int_vector<0>>());
-    for (uint64_t i = 0; i < c_ranks_.size(); i++) {
-      c_ranks_[i].resize(height(), sdsl::int_vector<0>());
-      for (uint64_t j = 0; j < c_ranks_[i].size(); j++) {
-        c_ranks_[i][j].resize(block_tree_types_[j]->size());
-      }
-    }
-    for (uint64_t i = 0; i < pointer_c_ranks_.size(); i++) {
-      pointer_c_ranks_[i].resize(block_tree_pointers_.size(),
-                                 sdsl::int_vector<0>());
-      for (uint64_t j = 0; j < pointer_c_ranks_[i].size(); j++) {
-        pointer_c_ranks_[i][j].resize(block_tree_pointers_[j]->size());
-      }
-    }
-    for (auto c : chars_) {
-      for (uint64_t i = 0; i < block_tree_types_[0]->size(); i++) {
-        rank_block(c, 0, i);
-      }
-      size_type max = 0;
-      for (uint64_t i = 1; i < block_tree_types_[0]->size(); i++) {
-        c_ranks_[chars_index_[c]][0][i] += c_ranks_[chars_index_[c]][0][i - 1];
-        if (c_ranks_[chars_index_[c]][0][i] > static_cast<uint64_t>(max)) {
-          max = c_ranks_[chars_index_[c]][0][i];
-        }
-      }
-      for (uint64_t i = 1; i < height(); i++) {
-        size_type counter = tau_;
-        size_type acc = 0;
-        for (uint64_t j = 0; j < block_tree_types_[i]->size(); j++) {
-          size_type temp = c_ranks_[chars_index_[c]][i][j];
-          c_ranks_[chars_index_[c]][i][j] += acc;
-          acc += temp;
-          counter--;
-          if (counter == 0) {
-            acc = 0;
-            counter = tau_;
-          }
-        }
-      }
-      for (uint64_t i = 0; i < pointer_c_ranks_[chars_index_[c]].size(); i++) {
-        sdsl::util::bit_compress(pointer_c_ranks_[chars_index_[c]][i]);
-      }
-      for (uint64_t i = 0; i < c_ranks_[chars_index_[c]].size(); i++) {
-        sdsl::util::bit_compress(c_ranks_[chars_index_[c]][i]);
-      }
-    }
-    return 0;
-  }
-
-  int32_t add_rank_support_omp(int32_t threads) {
-    rank_support = true;
-    c_ranks_.resize(chars_.size(), std::vector<sdsl::int_vector<0>>());
-    pointer_c_ranks_.resize(chars_.size(), std::vector<sdsl::int_vector<0>>());
-    for (uint64_t i = 0; i < c_ranks_.size(); i++) {
-      c_ranks_[i].resize(height(), sdsl::int_vector<0>());
-      for (uint64_t j = 0; j < c_ranks_[i].size(); j++) {
-        c_ranks_[i][j].resize(block_tree_types_[j]->size());
-      }
-    }
-    for (uint64_t i = 0; i < pointer_c_ranks_.size(); i++) {
-      pointer_c_ranks_[i].resize(block_tree_pointers_.size(),
-                                 sdsl::int_vector<0>());
-      for (uint64_t j = 0; j < pointer_c_ranks_[i].size(); j++) {
-        pointer_c_ranks_[i][j].resize(block_tree_pointers_[j]->size());
-      }
-    }
-    omp_set_num_threads(threads);
-
-#pragma omp parallel for default(none)
-    for (auto c : chars_) {
-      for (uint64_t i = 0; i < block_tree_types_[0]->size(); i++) {
-        rank_block(c, 0, i);
-      }
-      size_type max = 0;
-      for (uint64_t i = 1; i < block_tree_types_[0]->size(); i++) {
-        c_ranks_[chars_index_[c]][0][i] += c_ranks_[chars_index_[c]][0][i - 1];
-        if (c_ranks_[chars_index_[c]][0][i] > static_cast<uint64_t>(max)) {
-          max = c_ranks_[chars_index_[c]][0][i];
-        }
-      }
-      for (uint64_t i = 1; i < height(); i++) {
-        size_type counter = tau_;
-        size_type acc = 0;
-        for (uint64_t j = 0; j < block_tree_types_[i]->size(); j++) {
-          size_type temp = c_ranks_[chars_index_[c]][i][j];
-          c_ranks_[chars_index_[c]][i][j] += acc;
-          acc += temp;
-          counter--;
-          if (counter == 0) {
-            acc = 0;
-            counter = tau_;
-          }
-        }
-      }
-      for (uint64_t i = 0; i < pointer_c_ranks_[chars_index_[c]].size(); i++) {
-        sdsl::util::bit_compress(pointer_c_ranks_[chars_index_[c]][i]);
-      }
-      for (uint64_t i = 0; i < c_ranks_[chars_index_[c]].size(); i++) {
-        sdsl::util::bit_compress(c_ranks_[chars_index_[c]][i]);
-      }
     }
     return 0;
   }
@@ -878,7 +664,6 @@ protected:
         }
       }
     } else {
-      // TODO: Handle the case where blocks are not internal
       const size_type back_block_index = is_internal_rank.rank0(block_index);
       const size_type ptr = (*block_tree_pointers_[level])[back_block_index];
       const size_type off = (*block_tree_offsets_[level])[back_block_index];
@@ -895,49 +680,6 @@ protected:
     }
     one_ranks_[level][block_index] = num_ones;
     return num_ones;
-  }
-
-  ///
-  /// @brief Generates rank information for a block and all its children
-  /// recursively.
-  ///
-  /// @param c The character to generate rank information for.
-  /// @param level The level index the block is on.
-  /// @param block_index The index of the block on this level
-  size_type rank_block(uint8_t c, size_type level, size_type block_index) {
-    if (static_cast<uint64_t>(block_index) >=
-        block_tree_types_[level]->size()) {
-      return 0;
-    }
-    size_type rank_c = 0;
-    if ((*block_tree_types_[level])[block_index] == 1) {
-      if (static_cast<uint64_t>(level) != height() - 1) {
-        size_type rank_blk = block_tree_types_rs_[level]->rank1(block_index);
-        for (size_type k = 0; k < tau_; k++) {
-          rank_c += rank_block(c, level + 1, rank_blk * tau_ + k);
-        }
-      } else {
-        size_type rank_blk = block_tree_types_rs_[level]->rank1(block_index);
-        for (size_type k = 0; k < tau_; k++) {
-          rank_c += rank_leaf(c, rank_blk * tau_ + k, leaf_size);
-        }
-      }
-    } else {
-      size_type rank_0 = block_tree_types_rs_[level]->rank0(block_index);
-      size_type ptr = (*block_tree_pointers_[level])[rank_0];
-      size_type off = (*block_tree_offsets_[level])[rank_0];
-      size_type rank_g = 0;
-      rank_c += c_ranks_[chars_index_[c]][level][ptr];
-      if (off != 0) {
-        rank_g = part_rank_block(c, level, ptr, off);
-        size_type rank_2nd = part_rank_block(c, level, ptr + 1, off);
-        rank_c -= rank_g;
-        rank_c += rank_2nd;
-      }
-      pointer_c_ranks_[chars_index_[c]][level][rank_0] = rank_g;
-    }
-    c_ranks_[chars_index_[c]][level][block_index] = rank_c;
-    return rank_c;
   }
 
   size_type part_bit_rank_block(const size_type level,
@@ -976,7 +718,7 @@ protected:
       } else {
         // We're on the last level
         for (k = 0; k < tau_ && processed_chars + leaf_size <= chars_to_process;
-             k++) {
+             ++k) {
           num_ones += bit_rank_leaf(internal_index * tau_ + k, leaf_size);
           processed_chars += leaf_size;
         }
@@ -1012,61 +754,6 @@ protected:
     return num_ones;
   }
 
-  size_type part_rank_block(uint8_t c,
-                            size_type level,
-                            size_type block_index,
-                            size_type g) {
-    if (static_cast<uint64_t>(block_index) >=
-        block_tree_types_[level]->size()) {
-      return 0;
-    }
-    size_type rank_c = 0;
-    if ((*block_tree_types_[level])[block_index] == 1) {
-      if (static_cast<uint64_t>(level) != height() - 1) {
-        size_type rank_blk = block_tree_types_rs_[level]->rank1(block_index);
-        size_type k = 0;
-        size_type k_sum = 0;
-        for (k = 0; k < tau_ && k_sum + block_size_lvl_[level + 1] <= g; k++) {
-          rank_c += c_ranks_[chars_index_[c]][level + 1][rank_blk * tau_ + k];
-          k_sum += block_size_lvl_[level + 1];
-        }
-
-        if (k_sum != g) {
-          rank_c +=
-              part_rank_block(c, level + 1, rank_blk * tau_ + k, g - k_sum);
-        }
-      } else {
-        size_type rank_blk = block_tree_types_rs_[level]->rank1(block_index);
-        size_type k = 0;
-        size_type k_sum = 0;
-        for (k = 0; k < tau_ && k_sum + leaf_size <= g; k++) {
-          rank_c += rank_leaf(c, rank_blk * tau_ + k, leaf_size);
-          k_sum += leaf_size;
-        }
-
-        if (k_sum != g) {
-          rank_c += rank_leaf(c, rank_blk * tau_ + k, g % leaf_size);
-        }
-      }
-    } else {
-      size_type rank_0 = block_tree_types_rs_[level]->rank0(block_index);
-      size_type ptr = (*block_tree_pointers_[level])[rank_0];
-      size_type off = (*block_tree_offsets_[level])[rank_0];
-      if (g + off >= block_size_lvl_[level]) {
-        rank_c += c_ranks_[chars_index_[c]][level][ptr] -
-                  pointer_c_ranks_[chars_index_[c]][level][rank_0] +
-                  part_rank_block(c,
-                                  level,
-                                  ptr + 1,
-                                  g + off - block_size_lvl_[level]);
-      } else {
-        rank_c += part_rank_block(c, level, ptr, g + off) -
-                  pointer_c_ranks_[chars_index_[c]][level][rank_0];
-      }
-    }
-    return rank_c;
-  }
-
   ///
   /// @brief Count ones in leaf block.
   ///
@@ -1089,69 +776,6 @@ protected:
     }
     return result;
   }
-
-  size_type rank_leaf(uint8_t c, size_type leaf_index, size_type i) {
-    if (static_cast<uint64_t>(leaf_index * leaf_size) >=
-        compressed_leaves_.size()) {
-      return 0;
-    }
-    //        size_type x = leaves_.size() - leaf_index * this->tau_;
-    //        i = std::min(i, x);
-    size_type result = 0;
-    for (size_type ind = 0; ind < i; ind++) {
-      if (compressed_leaves_[leaf_index * leaf_size + ind] ==
-          compress_map_[c]) {
-        result++;
-      }
-    }
-    return result;
-  }
-
-  size_type
-  find_next_smallest_index_binary_search(size_type i,
-                                         std::vector<int64_t>& pVector) {
-    int64_t l = 0;
-    int64_t r = pVector.size();
-    while (l < r) {
-      int64_t m = std::floor((l + r) / 2);
-      if (i < pVector[m]) {
-        r = m;
-      } else {
-        l = m + 1;
-      }
-    }
-    return r - 1;
-  };
-  int64_t
-  find_next_smallest_index_linear_scan(size_type i,
-                                       std::vector<size_type>& pVector) {
-    int64_t b = 0;
-    while (b < pVector.size() && i >= pVector[b]) {
-      b++;
-    }
-    return b - 1;
-  };
-  size_type find_next_smallest_index_block_tree(size_type index) {
-    size_type block_size = this->block_size_lvl_[0];
-    size_type blk_pointer = index / block_size;
-    size_type off = index % block_size;
-    size_type child = 0;
-    for (size_type i = 0; i < this->height(); i++) {
-      if ((*this->block_tree_types_[i])[blk_pointer] == 0) {
-        return -1;
-      }
-      if (off > 0 && (*this->block_tree_types_[i])[blk_pointer + 1] == 0) {
-        return -1;
-      }
-      size_type rank_blk = this->block_tree_types_rs_[i]->rank1(blk_pointer);
-      blk_pointer = rank_blk * this->tau_;
-      block_size /= this->tau_;
-      child = off / block_size;
-      off = off % block_size;
-      blk_pointer += child;
-    }
-    return blk_pointer;
-  };
 };
 
 } // namespace pasta

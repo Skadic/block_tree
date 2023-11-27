@@ -307,9 +307,10 @@ int main(int argc, char** argv) {
                        Clock::now() - now)
                        .count();
     std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
-    std::cout << std::endl;
-    bt->add_bit_rank_support();
     FlatRankSelect<> frs(bv);
+    bt->add_bit_rank_support();
+    std::cout << " space_rs=" << bt->print_space_usage();
+    std::cout << std::endl;
 
 #if defined BT_INSTRUMENT && defined BT_DBG
     pasta::print_hash_data();
