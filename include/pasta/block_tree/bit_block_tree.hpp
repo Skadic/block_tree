@@ -321,7 +321,8 @@ public:
       while (zero_ranks(current_block) < rank) {
         ++current_block;
       }
-      rank -= (current_block == start_block) ? 0 : zero_ranks(current_block - 1);
+      rank -=
+          (current_block == start_block) ? 0 : zero_ranks(current_block - 1);
       pos += (current_block - start_block) * block_size * 8;
       if (!is_internal[current_block]) {
         size_t back_block_index = is_internal_rank.rank0(current_block);

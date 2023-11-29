@@ -306,11 +306,15 @@ int main(int argc, char** argv) {
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();
-    std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
-    FlatRankSelect<> frs(bv);
+    const size_t no_rs_space = bt->print_space_usage();
     bt->add_bit_rank_support();
-    std::cout << " space_rs=" << bt->print_space_usage();
+    auto elapsed_rs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                       Clock::now() - now)
+                       .count();
+    const size_t rs_space = bt->print_space_usage();
+    std::cout << " time=" << elapsed << " space=" << no_rs_space << " time_rs=" << elapsed_rs << " space_rs=" << rs_space;
     std::cout << std::endl;
+    FlatRankSelect<> frs(bv);
 
 #if defined BT_INSTRUMENT && defined BT_DBG
     pasta::print_hash_data();
