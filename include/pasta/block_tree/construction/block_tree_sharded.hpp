@@ -41,7 +41,8 @@ __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
 
-/*
+namespace sharded {
+
 /// @brief Determine whether to use a Rabin-Karp hash for hashing text windows
 /// or just use the block's content itself as a hash, stored in an integer.
 enum class UseHash {
@@ -50,7 +51,8 @@ enum class UseHash {
   /// @brief Use the block's content as a hash
   IDENTITY
 };
-*/
+
+} // namespace sharded
 
 /// @brief A parallel block tree construction algorithm using Rabin-Karp hashes
 ///   and a sharded hash map. Small blocks are not RK-hashed but rather use the
@@ -59,7 +61,7 @@ enum class UseHash {
 /// @tparam size_type The type used for indices etc. (must be a signed integer)
 ///   in the sharded hash map.
 template <std::integral input_type, std::signed_integral size_type>
-class BlockTreeFPParShardedSyncSmall : public BlockTree<input_type, size_type> {
+class BlockTreeSharded : public BlockTree<input_type, size_type> {
   using Clock = std::chrono::high_resolution_clock;
   using TimePoint = Clock::time_point;
 
@@ -446,17 +448,17 @@ private:
       LevelData& current = levels.back();
       if (2 * static_cast<uint64_t>(current.block_size * sizeof(input_type)) >
           8) {
-        scan_block_pairs<UseHash::RABIN_KARP>(text,
-                                              current,
-                                              is_padded,
-                                              threads,
-                                              queue_size);
+        scan_block_pairs<sharded::UseHash::RABIN_KARP>(text,
+                                                       current,
+                                                       is_padded,
+                                                       threads,
+                                                       queue_size);
       } else {
-        scan_block_pairs<UseHash::IDENTITY>(text,
-                                            current,
-                                            is_padded,
-                                            threads,
-                                            queue_size);
+        scan_block_pairs<sharded::UseHash::IDENTITY>(text,
+                                                     current,
+                                                     is_padded,
+                                                     threads,
+                                                     queue_size);
       }
 #ifdef BT_INSTRUMENT
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -465,17 +467,17 @@ private:
       now = Clock::now();
 #endif
       if (static_cast<uint64_t>(current.block_size * sizeof(input_type)) > 8) {
-        scan_blocks<UseHash::RABIN_KARP>(text,
-                                         current,
-                                         is_padded,
-                                         threads,
-                                         queue_size);
+        scan_blocks<sharded::UseHash::RABIN_KARP>(text,
+                                                  current,
+                                                  is_padded,
+                                                  threads,
+                                                  queue_size);
       } else {
-        scan_blocks<UseHash::IDENTITY>(text,
-                                       current,
-                                       is_padded,
-                                       threads,
-                                       queue_size);
+        scan_blocks<sharded::UseHash::IDENTITY>(text,
+                                                current,
+                                                is_padded,
+                                                threads,
+                                                queue_size);
       }
 #ifdef BT_INSTRUMENT
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -582,7 +584,7 @@ private:
   ///   use the blocks' contents themselves as hashes.
   ///   For block sizes greater than 4 bytes, use Rabin-Karp.
   ///
-  template <UseHash use_hash = UseHash::RABIN_KARP>
+  template <sharded::UseHash use_hash = sharded::UseHash::RABIN_KARP>
   void scan_block_pairs(const std::vector<input_type>& text,
                         LevelData& level,
                         const bool is_padded,
@@ -648,7 +650,7 @@ private:
       const auto end =
           std::min<size_t>(num_block_pairs, (thread_id + 1) * segment_size);
 
-      if constexpr (use_hash == UseHash::RABIN_KARP) {
+      if constexpr (use_hash == sharded::UseHash::RABIN_KARP) {
         RabinKarp rk(text, SIGMA, block_starts[0], pair_size, PRIME);
         for (size_t i = start; i < end; ++i) {
           // If the next block is not adjacent, we cannot hash the pair
@@ -669,7 +671,7 @@ private:
           const size_t block_start = block_starts[i];
           const input_type* block_start_ptr = text.data() + block_start;
           const uint64_t hash_value =
-              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+              pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
           RabinKarpHash hash(text,
                              mix_select(hash_value),
                              block_start,
@@ -710,7 +712,7 @@ private:
 #endif
 
       if (start < static_cast<size_t>(num_block_pairs)) {
-        if constexpr (use_hash == UseHash::RABIN_KARP) {
+        if constexpr (use_hash == sharded::UseHash::RABIN_KARP) {
           RabinKarp rk(text, SIGMA, block_starts[start], pair_size, PRIME);
           for (size_t i = start; i < end; ++i) {
             if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
@@ -894,8 +896,7 @@ private:
     const input_type* block_start_ptr = text.data() + block_start;
     for (size_t offset = 0; offset < num_iterations; ++offset) {
       const uint64_t hash_value =
-          (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
-           HASH_MASK);
+          pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
       RabinKarpHash current_hash(text,
                                  mix_select(hash_value),
                                  block_start + offset,
@@ -930,7 +931,7 @@ private:
   /// @tparam use_hash Determines whether to use a rabin karp hash for hashing
   /// text windows or to use the block's content as a hash. For any window size
   /// greater than 8 bytes, use Rabin-Karp.
-  template <UseHash use_hash = UseHash::RABIN_KARP>
+  template <sharded::UseHash use_hash = sharded::UseHash::RABIN_KARP>
   void scan_blocks(const std::vector<input_type>& text,
                    LevelData& level_data,
                    const bool is_padded,
@@ -1000,7 +1001,7 @@ private:
                                           (thread_id + 1) * segment_size);
 
       // Hash each block and store their hashes in the map
-      if constexpr (use_hash == UseHash::RABIN_KARP) {
+      if constexpr (use_hash == sharded::UseHash::RABIN_KARP) {
         RabinKarp rk(text, SIGMA, block_starts[0], block_size, PRIME);
         for (size_t i = start; i < end; ++i) {
           rk.restart(block_starts[i]);
@@ -1013,7 +1014,7 @@ private:
           const size_t block_start = block_starts[i];
           const input_type* block_start_ptr = text.data() + block_start;
           const uint64_t hash_value =
-              (*reinterpret_cast<const uint64_t*>(block_start_ptr) & HASH_MASK);
+              pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
           RabinKarpHash hash(text,
                              mix_select(hash_value),
                              block_start,
@@ -1054,7 +1055,7 @@ private:
       // Hash every window and find the first occurrences for every
       // block.
       if (start < block_starts.size() - is_padded) {
-        if constexpr (use_hash == UseHash::RABIN_KARP) {
+        if constexpr (use_hash == sharded::UseHash::RABIN_KARP) {
           RabinKarp rk(text, SIGMA, block_starts[start], block_size, PRIME);
           for (size_t i = start; i < end; ++i) {
             if (!level_data.next_is_adjacent(i)) {
@@ -1210,8 +1211,7 @@ private:
     const input_type* block_start_ptr = text.data() + block_start;
     for (size_type offset = 0; offset < level_data.block_size; ++offset) {
       const uint64_t hash_value =
-          (*reinterpret_cast<const uint64_t*>(block_start_ptr + offset) &
-           HASH_MASK);
+          pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
       RabinKarpHash hash(text,
                          mix_select(hash_value),
                          block_start + offset,
@@ -1337,8 +1337,10 @@ private:
       LevelData& previous_level = levels[level_index - 1];
       found_back_block |= static_cast<size_t>(new_num_internal[level_index]) <
                           levels[level_index].is_internal->size();
-      if (!found_back_block) {
-        level.is_internal.reset();
+      if (!found_back_block && level_index < levels.size() - 1) {
+        if (level_index < levels.size() - 1) {
+          level.is_internal.reset();
+        }
         level.is_internal_rank.reset();
         level.pointers.reset();
         level.offsets.reset();
@@ -1571,12 +1573,12 @@ private:
   }
 
 public:
-  BlockTreeFPParShardedSyncSmall(const std::vector<input_type>& text,
-                                 const size_t arity,
-                                 const size_t root_arity,
-                                 const size_t max_leaf_length,
-                                 const size_t threads,
-                                 const size_t queue_size) {
+  BlockTreeSharded(const std::vector<input_type>& text,
+                   const size_t arity,
+                   const size_t root_arity,
+                   const size_t max_leaf_length,
+                   const size_t threads,
+                   const size_t queue_size) {
     const auto old = omp_get_max_threads();
     const auto old_dynamic = omp_get_dynamic();
     omp_set_dynamic(0);
@@ -1590,7 +1592,7 @@ public:
     omp_set_num_threads(old);
   }
 
-  ~BlockTreeFPParShardedSyncSmall() {
+  ~BlockTreeSharded() {
     for (auto& rank : this->block_tree_types_rs_) {
       delete rank;
     }

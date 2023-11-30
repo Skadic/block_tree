@@ -26,7 +26,7 @@
 #include <iostream>
 #include <pasta/block_tree/bit_block_tree.hpp>
 #include <pasta/block_tree/block_tree.hpp>
-#include <pasta/block_tree/construction/bit_block_tree_sharded.hpp>
+#include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
 #include <syncstream>
 
 #define PAR_SHARDED_SYNC_SMALL
@@ -111,20 +111,20 @@ make_bt(std::vector<uint8_t>& text,
 }
 #  define ALGO_NAME "shard_sync"
 #elif defined PAR_SHARDED_SYNC_SMALL
-#  include <pasta/block_tree/construction/block_tree_fp_par_sync_sharded_small.hpp>
-std::unique_ptr<pasta::BlockTreeFPParShardedSyncSmall<uint8_t, int32_t>>
+#  include <pasta/block_tree/construction/block_tree_sharded.hpp>
+std::unique_ptr<pasta::BlockTreeSharded<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
-  return std::make_unique<
-      pasta::BlockTreeFPParShardedSyncSmall<uint8_t, int32_t>>(text,
-                                                               arity,
-                                                               1,
-                                                               leaf_length,
-                                                               threads,
-                                                               queue_size);
+  return std::make_unique<pasta::BlockTreeSharded<uint8_t, int32_t>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads,
+      queue_size);
 }
 #  define ALGO_NAME "shard_sync_small"
 #elif defined PAR_PHMAP
@@ -144,6 +144,23 @@ make_bt(std::vector<uint8_t>& text,
       threads);
 }
 #  define ALGO_NAME "par_map"
+#elif defined REC_BIT
+#  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
+std::unique_ptr<pasta::RecursiveBitBlockTreeSharded<int32_t, 4>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads,
+        const size_t queue_size) {
+  return std::make_unique<pasta::RecursiveBitBlockTreeSharded<int32_t, 4>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads,
+      queue_size);
+}
+#  define ALGO_NAME "rec_bit_shard"
 #elif defined PAR_PARLAY
 #  include <pasta/block_tree/construction/block_tree_fp_par_parlay.hpp>
 std::unique_ptr<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>
@@ -162,25 +179,6 @@ make_bt(std::vector<uint8_t>& text,
 }
 #  define ALGO_NAME "par_parlay"
 #endif
-
-#if defined PAR_SHARDED_SYNC || defined PAR_SHARDED_SYNC_SMALL
-#  define USES_QUEUE true
-#  define IS_PARALLEL true
-#else
-#  define USES_QUEUE false
-#endif
-
-#ifndef IS_PARALLEL
-#  if defined PAR_SHARDED_SYNC_SMALL || defined PAR_SHARDED_SYNC ||            \
-      defined PAR_SHARDED || defined PAR_PHMAP || defined LPF ||               \
-      defined PAR_PHMAP
-#    define IS_PARALLEL true
-#  else
-#    define IS_PARALLEL false
-#  endif
-#endif
-
-#define BIT_BT
 
 #include <sstream>
 #include <string>
@@ -232,7 +230,7 @@ int main(int argc, char** argv) {
               "of the bit vector respectively. In each byte, the least "
               "significant bit is index 0.");
 
-  std::string one_chars = "";
+  std::string one_chars;
   cp.add_string(
       'o',
       "one_chars",
@@ -240,6 +238,13 @@ int main(int argc, char** argv) {
       "A string to be used with the \"-b\" flag. If used, each character of "
       "the input represents one bit of the bit vector. It will be a 1 if this "
       "parameter string contains the respective character, 0 otherwise.");
+
+  bool verify = false;
+  cp.add_bool(
+      'v',
+      "verify",
+      verify,
+      "Verify whether all queries on the produced block tree are correct.");
 
   if (!cp.process(argc, argv)) {
     return 1;
@@ -297,23 +302,30 @@ int main(int argc, char** argv) {
 
   if (make_bv) {
     // Make bit vector block tree
-    auto bt = std::make_unique<BitBlockTreeSharded<int32_t>>(bv,
-                                                             arity,
-                                                             1,
-                                                             leaf_length,
-                                                             threads,
-                                                             queue_size);
+    auto bt =
+        std::make_unique<RecursiveBitBlockTreeSharded<int32_t, 5>>(bv,
+                                                                   arity,
+                                                                   1,
+                                                                   leaf_length,
+                                                                   threads,
+                                                                   queue_size);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();
     const size_t no_rs_space = bt->print_space_usage();
     bt->add_bit_rank_support();
     auto elapsed_rs = std::chrono::duration_cast<std::chrono::milliseconds>(
-                       Clock::now() - now)
-                       .count();
+                          Clock::now() - now)
+                          .count();
     const size_t rs_space = bt->print_space_usage();
-    std::cout << " time=" << elapsed << " space=" << no_rs_space << " time_rs=" << elapsed_rs << " space_rs=" << rs_space;
+    std::cout << " time=" << elapsed << " space=" << no_rs_space
+              << " time_rs=" << elapsed_rs << " space_rs=" << rs_space;
     std::cout << std::endl;
+
+    if (!verify) {
+      return 0;
+    }
+
     FlatRankSelect<> frs(bv);
 
 #if defined BT_INSTRUMENT && defined BT_DBG
@@ -379,6 +391,10 @@ int main(int argc, char** argv) {
 
     std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
     std::cout << std::endl;
+
+    if (!verify) {
+      return 0;
+    }
 
 #if defined BT_INSTRUMENT && defined BT_DBG
     pasta::print_hash_data();
