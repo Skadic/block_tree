@@ -257,7 +257,7 @@ int main(int argc, char** argv) {
             << std::endl;
 #endif
 
-  pasta::BitVector bv;
+  std::unique_ptr<pasta::BitVector> bv;
   std::vector<uint8_t> text;
   {
     std::string input;
@@ -268,20 +268,20 @@ int main(int argc, char** argv) {
     if (make_bv) {
       if (one_chars.empty()) {
         // Interpret each character as 8 bits
-        new (&bv) pasta::BitVector(input.size() * 8);
-        std::span<std::byte> bytes = std::as_writable_bytes(bv.data());
+        bv = std::make_unique<pasta::BitVector>(input.size() * 8);
+        std::span<std::byte> bytes = std::as_writable_bytes(bv->data());
         for (size_t i = 0; i < input.size(); ++i) {
           bytes[i] = std::byte{static_cast<uint8_t>(input[i])};
         }
       } else {
         // Interpret each character as a bit
-        new (&bv) pasta::BitVector(input.size());
+        bv = std::make_unique<pasta::BitVector>(input.size());
         std::array<bool, 256> is_one{};
         for (char c : one_chars) {
           is_one[static_cast<uint8_t>(c)] = true;
         }
         for (size_t i = 0; i < input.size(); ++i) {
-          bv[i] = is_one[static_cast<uint8_t>(input[i])];
+          (*bv)[i] = is_one[static_cast<uint8_t>(input[i])];
         }
       }
     } else {
@@ -294,7 +294,7 @@ int main(int argc, char** argv) {
             << " threads=" << threads << " arity=" << arity
             << " leaf_length=" << leaf_length;
   if (make_bv) {
-    std::cout << " bv_size=" << bv.size();
+    std::cout << " bv_size=" << bv->size();
   } else {
     std::cout << " file_size=" << text.size();
   }
@@ -303,7 +303,7 @@ int main(int argc, char** argv) {
   if (make_bv) {
     // Make bit vector block tree
     auto bt =
-        std::make_unique<RecursiveBitBlockTreeSharded<int32_t, 5>>(bv,
+        std::make_unique<RecursiveBitBlockTreeSharded<int32_t, 1>>(*bv,
                                                                    arity,
                                                                    1,
                                                                    leaf_length,
@@ -313,7 +313,7 @@ int main(int argc, char** argv) {
                        Clock::now() - now)
                        .count();
     const size_t no_rs_space = bt->print_space_usage();
-    bt->add_bit_rank_support();
+    bt->add_bit_rank_support(threads);
     auto elapsed_rs = std::chrono::duration_cast<std::chrono::milliseconds>(
                           Clock::now() - now)
                           .count();
@@ -326,24 +326,24 @@ int main(int argc, char** argv) {
       return 0;
     }
 
-    FlatRankSelect<> frs(bv);
+    FlatRankSelect<> frs(*bv);
 
 #if defined BT_INSTRUMENT && defined BT_DBG
     pasta::print_hash_data();
 #endif
 #pragma omp parallel for
-    for (size_t i = 0; i < bv.size(); ++i) {
+    for (size_t i = 0; i < bv->size(); ++i) {
       const bool c = bt->access(i);
-      if (c != bv[i]) {
+      if (c != (*bv)[i]) {
         std::osyncstream(std::cerr)
             << "Access error at position " << i
-            << "\nExpected: " << std::boolalpha << bv[i] << "\nActual: " << c
+            << "\nExpected: " << std::boolalpha << (*bv)[i] << "\nActual: " << c
             << std::noboolalpha << std::endl;
         exit(1);
       }
     }
 #pragma omp parallel for
-    for (size_t i = 0; i < bv.size(); i++) {
+    for (size_t i = 0; i < bv->size(); i++) {
       const size_t bt_rank = bt->rank1(i);
       const size_t bv_rank = frs.rank1(i);
 
@@ -354,7 +354,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("oof");
       }
     }
-    const size_t num_zeros = frs.rank0(bv.size());
+    const size_t num_zeros = frs.rank0(bv->size());
 
 #pragma omp parallel for
     for (size_t i = 1; i <= num_zeros; i++) {
@@ -368,7 +368,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    const size_t num_ones = frs.rank1(bv.size());
+    const size_t num_ones = frs.rank1(bv->size());
 
 #pragma omp parallel for
     for (size_t i = 1; i <= num_ones; i++) {
