@@ -29,7 +29,9 @@
 #include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
 #include <syncstream>
 
-#define PAR_SHARDED_SYNC_SMALL
+#define RECURSION_LEVELS 0
+
+#define REC_PAR_SHARDED
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -127,6 +129,25 @@ make_bt(std::vector<uint8_t>& text,
       queue_size);
 }
 #  define ALGO_NAME "shard_sync_small"
+#elif defined REC_PAR_SHARDED
+#  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
+std::unique_ptr<
+    pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, RECURSION_LEVELS>>
+make_bt(std::vector<uint8_t>& text,
+        const size_t arity,
+        const size_t leaf_length,
+        const size_t threads,
+        const size_t queue_size) {
+  return std::make_unique<
+      pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, RECURSION_LEVELS>>(
+      text,
+      arity,
+      1,
+      leaf_length,
+      threads,
+      queue_size);
+}
+#  define ALGO_NAME "rec_shard"
 #elif defined PAR_PHMAP
 #  include <pasta/block_tree/construction/block_tree_fp_par_phmap.hpp>
 std::unique_ptr<pasta::BlockTreeFPParPH<uint8_t, int32_t>>
@@ -307,13 +328,13 @@ int main(int argc, char** argv) {
 
   if (make_bv) {
     // Make bit vector block tree
-    auto bt =
-        std::make_unique<RecursiveBitBlockTreeSharded<int32_t, 0>>(*bv,
-                                                                   arity,
-                                                                   1,
-                                                                   leaf_length,
-                                                                   threads,
-                                                                   queue_size);
+    auto bt = std::make_unique<
+        RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>(*bv,
+                                                                 arity,
+                                                                 1,
+                                                                 leaf_length,
+                                                                 threads,
+                                                                 queue_size);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();
@@ -323,6 +344,7 @@ int main(int argc, char** argv) {
                           Clock::now() - now)
                           .count();
     const size_t rs_space = bt->print_space_usage();
+    std::cout << " rec=" << RECURSION_LEVELS;
     std::cout << " time=" << elapsed << " space=" << no_rs_space
               << " time_rs=" << elapsed_rs << " space_rs=" << rs_space;
     std::cout << std::endl;
@@ -394,6 +416,7 @@ int main(int argc, char** argv) {
                        Clock::now() - now)
                        .count();
 
+    std::cout << " rec=" << RECURSION_LEVELS;
     std::cout << " time=" << elapsed << " space=" << bt->print_space_usage();
     std::cout << std::endl;
 
