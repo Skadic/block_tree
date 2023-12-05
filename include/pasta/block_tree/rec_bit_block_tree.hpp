@@ -562,13 +562,16 @@ public:
 
   void
   add_bit_rank_support(size_t threads = std::thread::hardware_concurrency()) {
+    if (rank_support) {
+      return;
+    }
+    rank_support = true;
+
     // FIXME For the last level where block_tree_types_ is a bitvec, using
     //  multiple threads doesn't work for some reason
     if constexpr (recursion_level == 0) {
       threads = 1;
     }
-
-    rank_support = true;
 
     // Resize rank information vectors
     one_ranks_.resize(height(), sdsl::int_vector<0>());
@@ -581,7 +584,8 @@ public:
           block_tree_pointers_[level]->size());
     }
 
-#pragma omp parallel for default(none) num_threads(threads)
+    // FIXME: breaks if parallelism is used
+    // #pragma omp parallel for default(none) num_threads(threads)
     for (size_t block = 0; block < block_tree_types_[0]->size(); block++) {
       bit_rank_block(0, block);
     }

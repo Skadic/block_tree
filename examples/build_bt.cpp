@@ -257,11 +257,16 @@ int main(int argc, char** argv) {
             << std::endl;
 #endif
 
+  if (!std::filesystem::exists(file)) {
+    std::cerr << "File does not exist" << std::endl;
+    exit(1);
+  }
+
   std::unique_ptr<pasta::BitVector> bv;
   std::vector<uint8_t> text;
   {
     std::string input;
-    std::ifstream t(argv[1]);
+    std::ifstream t(file);
     std::stringstream buffer;
     buffer << t.rdbuf();
     input = buffer.str();
@@ -303,7 +308,7 @@ int main(int argc, char** argv) {
   if (make_bv) {
     // Make bit vector block tree
     auto bt =
-        std::make_unique<RecursiveBitBlockTreeSharded<int32_t, 1>>(*bv,
+        std::make_unique<RecursiveBitBlockTreeSharded<int32_t, 0>>(*bv,
                                                                    arity,
                                                                    1,
                                                                    leaf_length,
@@ -313,7 +318,7 @@ int main(int argc, char** argv) {
                        Clock::now() - now)
                        .count();
     const size_t no_rs_space = bt->print_space_usage();
-    bt->add_bit_rank_support(threads);
+    bt->add_bit_rank_support(1);
     auto elapsed_rs = std::chrono::duration_cast<std::chrono::milliseconds>(
                           Clock::now() - now)
                           .count();
