@@ -20,6 +20,7 @@
 
 #pragma once
 
+#include <ankerl/unordered_dense.h>
 #include <iostream>
 #include <omp.h>
 #include <pasta/bit_vector/bit_vector.hpp>
