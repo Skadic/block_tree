@@ -149,10 +149,10 @@ public:
   constexpr MersenneHash(const MersenneHash& other) = default;
   constexpr MersenneHash(MersenneHash&& other) = default;
 
-  MersenneHash& operator=(const MersenneHash& other) = default;
-  MersenneHash& operator=(MersenneHash&& other) = default;
+  constexpr MersenneHash& operator=(const MersenneHash& other) = default;
+  constexpr MersenneHash& operator=(MersenneHash&& other) = default;
 
-  bool operator==(const MersenneHash& other) const {
+  constexpr bool operator==(const MersenneHash& other) const {
 #ifdef BT_INSTRUMENT
     ++mersenne_hash_comparisons;
 #endif
@@ -196,14 +196,14 @@ public:
     return is_same;
   };
 
-  [[nodiscard]] std::span<const std::byte> overlapping_range() const {
+  [[nodiscard]] constexpr std::span<const std::byte> overlapping_range() const {
     return text_.subspan(start_ / 8, ((length_ - 1) / 8) + 1);
   }
 
 private:
-  static bool get_bit(const std::span<const std::byte> v,
-                      const size_t byte_index,
-                      const size_t bit_index) {
+  constexpr static bool get_bit(const std::span<const std::byte> v,
+                                const size_t byte_index,
+                                const size_t bit_index) {
     return (v[byte_index] & std::byte{static_cast<uint8_t>(1 << bit_index)}) >
            std::byte{0};
   }

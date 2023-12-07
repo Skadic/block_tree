@@ -23,14 +23,10 @@
 
 #include <ankerl/unordered_dense.h>
 #include <bit>
-#include <iostream>
-#include <omp.h>
 #include <pasta/bit_vector/bit_vector.hpp>
-#include <pasta/bit_vector/support/flat_rank_select.hpp>
 #include <pasta/bit_vector/support/optimized_for.hpp>
 #include <pasta/bit_vector/support/rank.hpp>
 #include <pasta/bit_vector/support/rank_select.hpp>
-#include <pasta/bit_vector/support/wide_rank_select.hpp>
 #include <sdsl/int_vector.hpp>
 #include <vector>
 

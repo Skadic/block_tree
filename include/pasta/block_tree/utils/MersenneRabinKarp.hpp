@@ -31,7 +31,7 @@ namespace pasta {
 __extension__ typedef unsigned __int128 uint128_t;
 
 template <uint8_t exponent>
-static constexpr uint128_t primer() {
+static consteval uint128_t primer() {
   uint128_t res = 1;
   for (size_t i = 0; i < exponent; i++) {
     res <<= 1;
@@ -72,11 +72,11 @@ public:
   /// @param length The window size.
   /// @param prime A large prime used for modulus operations
   ///   iff not using mersenne_exponent.
-  MersenneRabinKarp(const std::span<const T> text,
-                    const uint64_t sigma,
-                    const uint64_t init,
-                    const uint64_t length,
-                    const uint128_t prime)
+  constexpr MersenneRabinKarp(const std::span<const T> text,
+                              const uint64_t sigma,
+                              const uint64_t init,
+                              const uint64_t length,
+                              const uint128_t prime)
       : text_(text),
         sigma_(sigma),
         init_(init),
@@ -96,11 +96,11 @@ public:
     max_sigma_ = sigma_c;
   };
 
-  MersenneRabinKarp(const std::vector<T>& text,
-                    const uint64_t sigma,
-                    const uint64_t init,
-                    const uint64_t length,
-                    const uint128_t prime)
+  constexpr MersenneRabinKarp(const std::vector<T>& text,
+                              const uint64_t sigma,
+                              const uint64_t init,
+                              const uint64_t length,
+                              const uint128_t prime)
       : MersenneRabinKarp(std::span(text), sigma, init, length, prime) {}
 
   /// @brief Moves the hasher to the specified start index in the backing
@@ -118,11 +118,11 @@ public:
     hash_ = fp;
   };
 
-  inline uint128_t mersenneModulo(uint128_t k) const {
+  constexpr uint128_t mersenneModulo(uint128_t k) const {
     if constexpr (mersenne_exponent == 0) {
       return k % prime_;
     } else {
-      constexpr static uint128_t MERSENNE = primer<mersenne_exponent>();
+      constexpr uint128_t MERSENNE = primer<mersenne_exponent>();
       uint128_t i = (k & MERSENNE) + (k >> mersenne_exponent);
       i -= (i >= MERSENNE) * MERSENNE;
       return i;
@@ -131,12 +131,12 @@ public:
 
   /// @brief Retrieves the hash value at the hasher's current position.
   /// @return A MersenneHash object representing the current hash value.
-  inline MersenneHash<T> current_hash() const {
+  constexpr MersenneHash<T> current_hash() const {
     return MersenneHash<T>(text_, hash_, init_, length_);
   }
 
   /// @brief Advances the hasher by one character.
-  void next() {
+  constexpr void next() {
     if (text_.size() <= init_ + length_) {
       return;
     }
@@ -190,10 +190,10 @@ public:
   /// @param prime A large prime used for modulus operations
   ///   iff not using mersenne_exponent.
   template <typename T>
-  MersenneRabinKarp(const std::span<T> text,
-                    const uint64_t init,
-                    const uint64_t length,
-                    const uint128_t prime)
+  constexpr MersenneRabinKarp(const std::span<T> text,
+                              const uint64_t init,
+                              const uint64_t length,
+                              const uint128_t prime)
       : text_(std::as_bytes(text)),
         init_(init),
         length_(length),
@@ -211,15 +211,15 @@ public:
     max_sigma_ = sigma_c;
   }
 
-  MersenneRabinKarp(const pasta::BitVector& text,
-                    const uint64_t init,
-                    const uint64_t length,
-                    const uint128_t prime)
+  constexpr MersenneRabinKarp(const pasta::BitVector& text,
+                              const uint64_t init,
+                              const uint64_t length,
+                              const uint128_t prime)
       : MersenneRabinKarp(as_bytes(text.data()), init, length, prime) {}
 
   /// @brief Moves the hasher to the specified start index in the backing
   ///   vector.
-  void restart(const uint64_t index) {
+  constexpr void restart(const uint64_t index) {
     if (index + length_ >= text_.size()) {
       return;
     }
@@ -232,11 +232,11 @@ public:
     hash_ = fp;
   };
 
-  inline uint128_t mersenneModulo(uint128_t k) const {
+  [[nodiscard]] constexpr uint128_t mersenneModulo(const uint128_t k) const {
     if constexpr (mersenne_exponent == 0) {
       return k % prime_;
     } else {
-      constexpr static uint128_t MERSENNE = primer<mersenne_exponent>();
+      constexpr uint128_t MERSENNE = primer<mersenne_exponent>();
       uint128_t i = (k & MERSENNE) + (k >> mersenne_exponent);
       i -= (i >= MERSENNE) * MERSENNE;
       return i;
@@ -245,12 +245,12 @@ public:
 
   /// @brief Retrieves the hash value at the hasher's current position.
   /// @return A MersenneHash object representing the current hash value.
-  [[nodiscard]] MersenneHash<bool> current_hash() const {
+  [[nodiscard]] constexpr MersenneHash<bool> current_hash() const {
     return {text_, hash_, init_, length_};
   }
 
   /// @brief Advances the hasher by one character.
-  void next() {
+  constexpr void next() {
     if (text_.size() <= init_ + length_) {
       return;
     }
@@ -274,27 +274,27 @@ public:
   };
 
 private:
-  [[nodiscard]] bool out_bit() const {
+  [[nodiscard]] constexpr bool out_bit() const {
     const size_t byte_index = init_ / 8;
     const size_t bit_index = init_ % 8;
     return get_bit(byte_index, bit_index);
   }
 
-  [[nodiscard]] bool in_bit() const {
+  [[nodiscard]] constexpr bool in_bit() const {
     const size_t idx = init_ + length_;
     const size_t byte_index = idx / 8;
     const size_t bit_index = idx % 8;
     return get_bit(byte_index, bit_index);
   }
 
-  [[nodiscard]] bool get_bit(const size_t bit_index) const {
+  [[nodiscard]] constexpr bool get_bit(const size_t bit_index) const {
     return (text_[bit_index / 8] &
             std::byte{static_cast<uint8_t>(1 << (bit_index % 8))}) >
            std::byte{0};
   }
 
-  [[nodiscard]] bool get_bit(const size_t byte_index,
-                             const size_t bit_index) const {
+  [[nodiscard]] constexpr bool get_bit(const size_t byte_index,
+                                       const size_t bit_index) const {
     return (text_[byte_index] &
             std::byte{static_cast<uint8_t>(1 << bit_index)}) > std::byte{0};
   }

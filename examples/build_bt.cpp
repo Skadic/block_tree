@@ -24,8 +24,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <pasta/block_tree/bit_block_tree.hpp>
-#include <pasta/block_tree/block_tree.hpp>
+#include <pasta/bit_vector/support/flat_rank_select.hpp>
 #include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
 #include <syncstream>
 
