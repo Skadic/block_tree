@@ -22,7 +22,6 @@
 #pragma once
 
 #include <bit>
-#include <concepts>
 #include <pasta/bit_vector/bit_vector.hpp>
 #include <pasta/bit_vector/support/optimized_for.hpp>
 #include <pasta/bit_vector/support/rank_select.hpp>
@@ -515,24 +514,37 @@ public:
     size_t space_usage = sizeof(tau_) + sizeof(max_leaf_length_) + sizeof(s_) +
                          sizeof(leaf_size);
 
+    auto delta_size = 0;
     for (const auto* bt : block_tree_types_) {
       if constexpr (types_is_block_tree) {
         space_usage += bt->print_space_usage();
+        delta_size += bt->print_space_usage();
       } else {
         space_usage += bt->size() / 8;
+        delta_size += bt->size() / 8;
       }
     }
+    std::cout << "bv size: " << delta_size << std::endl;
+    delta_size = 0;
     if constexpr (recursion_level == 0) {
       for (const auto* rs : block_tree_types_rs_) {
         space_usage += rs->space_usage();
+        delta_size += rs->space_usage();
       }
+      std::cout << "rs size: " << delta_size << std::endl;
     }
+    delta_size = 0;
     for (const auto iv : block_tree_pointers_) {
       space_usage += (int64_t)sdsl::size_in_bytes(*iv);
+      delta_size += (int64_t)sdsl::size_in_bytes(*iv);
+      ;
     }
+    std::cout << "ptrs size: " << delta_size << std::endl;
+    delta_size = 0;
     for (const auto iv : block_tree_offsets_) {
       space_usage += sdsl::size_in_bytes(*iv);
     }
+    std::cout << "offs size: " << delta_size << std::endl;
     space_usage += block_size_lvl_.size() *
                    sizeof(typename decltype(block_size_lvl_)::value_type);
     space_usage += block_per_lvl_.size() *
@@ -817,13 +829,17 @@ protected:
 
     size_type result = 0;
     for (size_type i = 0; i < max_char_index; ++i) {
-      const uint8_t byte =
-          decompress_map_[compressed_leaves_[leaf_index * leaf_size + i]];
+      const uint8_t compressed_byte =
+          compressed_leaves_[leaf_index * leaf_size + i];
+      const uint8_t byte = decompress_map_[compressed_byte];
       result += std::popcount(byte);
     }
     return result;
   }
 };
+
+template <std::signed_integral size_type>
+using BitBlockTree = RecursiveBitBlockTree<size_type>;
 
 } // namespace pasta
 

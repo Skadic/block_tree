@@ -29,7 +29,6 @@
 
 #include <ankerl/unordered_dense.h>
 #include <atomic>
-#include <concepts>
 #include <list>
 #include <memory>
 #include <omp.h>
@@ -42,15 +41,6 @@ __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
 
-/// @brief Determine whether to use a Rabin-Karp hash for hashing text windows
-/// or just use the block's content itself as a hash, stored in an integer.
-enum class UseHash {
-  /// @brief Use a Rabin-Karp hash
-  RABIN_KARP,
-  /// @brief Use the block's content as a hash
-  IDENTITY
-};
-
 /// @brief A parallel block tree construction algorithm using Rabin-Karp hashes
 ///   and a sharded hash map. Small blocks are not RK-hashed but rather use the
 ///   blocks themselves.
@@ -61,6 +51,15 @@ class RecursiveBitBlockTreeSharded
     : public RecursiveBitBlockTree<size_type, recursion_level> {
   using Clock = std::chrono::high_resolution_clock;
   using TimePoint = Clock::time_point;
+
+  /// @brief Determine whether to use a Rabin-Karp hash for hashing text windows
+  /// or just use the block's content itself as a hash, stored in an integer.
+  enum class UseHash {
+    /// @brief Use a Rabin-Karp hash
+    RABIN_KARP,
+    /// @brief Use the block's content as a hash
+    IDENTITY
+  };
 
   /// @brief For some block size (in bytes) i, return the number of trailing
   ///   zeros in a 64 bit integer when zeroing out characters that are not part
@@ -107,7 +106,7 @@ class RecursiveBitBlockTreeSharded
   /// @brief The exponent of the mersenne prime used for the Rabin-Karp hasher
   constexpr static uint8_t PRIME_EXPONENT = 107;
   // constexpr static uint8_t PRIME_EXPONENT = 89;
-  //  constexpr static uint8_t PRIME_EXPONENT = 61;
+  // constexpr static uint8_t PRIME_EXPONENT = 61;
   /// @brief A mersenne prime used for the Rabin-Karp hasher
   constexpr static uint128_t PRIME = pasta::primer<PRIME_EXPONENT>();
 
@@ -120,9 +119,6 @@ class RecursiveBitBlockTreeSharded
   template <typename key_type, typename value_type>
   using SeqHashMap =
       ankerl::unordered_dense::map<key_type, value_type, std::hash<key_type>>;
-  // robin_hood::unordered_flat_map<key_type, value_type,
-  // std::hash<key_type>>;
-  // std::unordered_map<key_type, value_type, std::hash<key_type>>;
 
   /// @brief A rabin karp hasher preconfigured for the current template
   ///   parameters
@@ -137,15 +133,12 @@ class RecursiveBitBlockTreeSharded
   using RabinKarpMap =
       SyncShardedMap<RabinKarpHash, value_type, seq_map_type, update_fn_type>;
 
-#define MIX
   static uint64_t mix_select(uint64_t key) {
-#ifdef MIX
     key ^= (key >> 31);
     key *= 0x7fb5d329728ea185;
     key ^= (key >> 27);
     key *= 0x81dadef4bc2dd44d;
     key ^= (key >> 33);
-#endif
     return key;
   }
 
@@ -483,14 +476,17 @@ private:
 #endif
 
       // Generate the next level (if we're not at the last level)
-      if (level < static_cast<size_t>(tree_height) - 1) {
+      if (level < static_cast<size_t>(tree_height) - 1 &&
+          levels.back().block_size > this->max_leaf_length_ * this->tau_) {
         levels.push_back(std::move(generate_next_level(text, current)));
-      }
 #ifdef BT_INSTRUMENT
-      generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         Clock::now() - now)
-                         .count();
+        generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           Clock::now() - now)
+                           .count();
 #endif
+      } else {
+        break;
+      }
     }
 #ifdef BT_INSTRUMENT
 #  if defined(BT_DBG)
@@ -1397,6 +1393,8 @@ private:
            b++) {
         if (static_cast<size_t>(block_start + b) < text.size()) {
           this->leaves_.push_back(text[block_start + b]);
+        } else {
+          this->leaves_.push_back(0);
         }
       }
     }

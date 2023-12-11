@@ -18,17 +18,15 @@
  *
  ******************************************************************************/
 
-#include "pasta/block_tree/utils/MersenneHash.hpp"
-
-#include <bitset>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
+#include <pasta/block_tree/construction/dense_bit_block_tree_sharded.hpp>
 #include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
 #include <syncstream>
 
-#define RECURSION_LEVELS 0
+constexpr size_t RECURSION_LEVELS = 1;
 
 #define REC_PAR_SHARDED
 #ifdef FP
@@ -112,7 +110,7 @@ make_bt(std::vector<uint8_t>& text,
 }
 #  define ALGO_NAME "shard_sync"
 #elif defined PAR_SHARDED_SYNC_SMALL
-#  include <pasta/block_tree/construction/block_tree_sharded.hpp>
+#  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
 std::unique_ptr<pasta::BlockTreeSharded<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
@@ -207,6 +205,8 @@ make_bt(std::vector<uint8_t>& text,
 using Clock = std::chrono::high_resolution_clock;
 using TimePoint = Clock::time_point;
 using Duration = Clock::duration;
+
+using A = pasta::DenseBitBlockTreeSharded<int32_t>;
 
 int main(int argc, char** argv) {
   using namespace pasta;
@@ -327,6 +327,7 @@ int main(int argc, char** argv) {
 
   if (make_bv) {
     // Make bit vector block tree
+
     auto bt = std::make_unique<
         RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>(*bv,
                                                                  arity,
@@ -334,11 +335,14 @@ int main(int argc, char** argv) {
                                                                  leaf_length,
                                                                  threads,
                                                                  queue_size);
+
+    // auto bt =
+    //     std::make_unique<A>(*bv, arity, 1, leaf_length, threads, queue_size);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();
     const size_t no_rs_space = bt->print_space_usage();
-    bt->add_bit_rank_support(1);
+    bt->add_bit_rank_support();
     auto elapsed_rs = std::chrono::duration_cast<std::chrono::milliseconds>(
                           Clock::now() - now)
                           .count();

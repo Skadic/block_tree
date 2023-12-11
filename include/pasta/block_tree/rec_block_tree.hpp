@@ -2,6 +2,7 @@
  * This file is part of pasta::block_tree
  *
  * Copyright (C) 2022 Daniel Meyer
+ * Copyright (C) 2023 Etienne Palanga  <etienne.palanga@tu-dortmund.de>
  *
  * pasta::block_tree is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,6 +21,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <omp.h>
 #include <pasta/bit_vector/bit_vector.hpp>
 #include <pasta/bit_vector/support/optimized_for.hpp>
@@ -774,5 +776,8 @@ public:
     return blk_pointer;
   };
 };
+
+template <std::integral input_type, std::signed_integral size_type>
+using BlockTree = RecursiveBlockTree<input_type, size_type, 0>;
 } // namespace pasta
 /******************************************************************************/

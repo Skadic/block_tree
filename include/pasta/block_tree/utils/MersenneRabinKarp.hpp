@@ -173,7 +173,7 @@ template <typename size_type, uint8_t mersenne_exponent>
 class MersenneRabinKarp<bool, size_type, mersenne_exponent> {
 public:
   /// The text being hashed
-  std::span<const std::byte> text_;
+  const pasta::BitVector& text_;
   uint64_t init_;
   /// The window size of this hasher
   uint64_t length_;
@@ -183,18 +183,18 @@ public:
   uint128_t hash_;
   uint128_t max_sigma_;
 
-  /// @brief Construct a new Rabin Karp hasher.
-  /// @param text The text to hash. (not just the window but the entire text)
-  /// @param init The start index of the first hashed window in the text.
-  /// @param length The window size.
+  /// @brief Construct a new Rabin Karp hasher over a bitstring.
+  /// @param text The bitvector to hash. (not just the window but the entire
+  ///   text)
+  /// @param init The start bit-index of the first hashed window in the text.
+  /// @param length The window size in bits.
   /// @param prime A large prime used for modulus operations
   ///   iff not using mersenne_exponent.
-  template <typename T>
-  constexpr MersenneRabinKarp(const std::span<T> text,
+  constexpr MersenneRabinKarp(const pasta::BitVector& text,
                               const uint64_t init,
                               const uint64_t length,
                               const uint128_t prime)
-      : text_(std::as_bytes(text)),
+      : text_(text),
         init_(init),
         length_(length),
         prime_(prime) {
@@ -210,12 +210,6 @@ public:
     hash_ = fp;
     max_sigma_ = sigma_c;
   }
-
-  constexpr MersenneRabinKarp(const pasta::BitVector& text,
-                              const uint64_t init,
-                              const uint64_t length,
-                              const uint128_t prime)
-      : MersenneRabinKarp(as_bytes(text.data()), init, length, prime) {}
 
   /// @brief Moves the hasher to the specified start index in the backing
   ///   vector.
@@ -275,28 +269,17 @@ public:
 
 private:
   [[nodiscard]] constexpr bool out_bit() const {
-    const size_t byte_index = init_ / 8;
-    const size_t bit_index = init_ % 8;
-    return get_bit(byte_index, bit_index);
+    return get_bit(init_);
   }
 
   [[nodiscard]] constexpr bool in_bit() const {
     const size_t idx = init_ + length_;
-    const size_t byte_index = idx / 8;
-    const size_t bit_index = idx % 8;
-    return get_bit(byte_index, bit_index);
+    return get_bit(idx);
   }
 
-  [[nodiscard]] constexpr bool get_bit(const size_t bit_index) const {
-    return (text_[bit_index / 8] &
-            std::byte{static_cast<uint8_t>(1 << (bit_index % 8))}) >
-           std::byte{0};
-  }
-
-  [[nodiscard]] constexpr bool get_bit(const size_t byte_index,
-                                       const size_t bit_index) const {
-    return (text_[byte_index] &
-            std::byte{static_cast<uint8_t>(1 << bit_index)}) > std::byte{0};
+  [[nodiscard, gnu::noinline]] constexpr bool
+  get_bit(const size_t bit_index) const {
+    return text_[bit_index];
   }
 };
 

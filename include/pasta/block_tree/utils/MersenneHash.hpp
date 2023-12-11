@@ -121,30 +121,23 @@ class MersenneHash<bool> {
 public:
   __extension__ typedef unsigned __int128 uint128_t;
   /// @brief The whole string in which the substring lies
-  std::span<const std::byte> text_;
+  const pasta::BitVector* text_;
   uint128_t hash_;
   /// @brief The bit start-position of the hashed substring
-  uint32_t start_;
+  uint64_t start_;
   /// @brief The number of bits in the hashed substring
-  uint32_t length_;
-
-  template <typename T>
-  constexpr MersenneHash(const std::span<T> text,
-                         const uint128_t hash,
-                         const uint64_t start,
-                         const uint64_t length)
-      : text_(std::as_bytes(text)),
-        hash_(hash),
-        start_(start),
-        length_(length) {}
+  uint64_t length_;
 
   MersenneHash(const pasta::BitVector& text,
                const uint128_t hash,
                const uint64_t start,
                const uint64_t length)
-      : MersenneHash(text.data(), hash, start, length){};
+      : text_{&text},
+        hash_{hash},
+        start_{start},
+        length_{length} {};
 
-  constexpr MersenneHash() : hash_(0), start_(0), length_(0){};
+  constexpr MersenneHash() : text_(nullptr), hash_(0), start_(0), length_(0){};
 
   constexpr MersenneHash(const MersenneHash& other) = default;
   constexpr MersenneHash(MersenneHash&& other) = default;
@@ -152,38 +145,34 @@ public:
   constexpr MersenneHash& operator=(const MersenneHash& other) = default;
   constexpr MersenneHash& operator=(MersenneHash&& other) = default;
 
-  constexpr bool operator==(const MersenneHash& other) const {
+  [[gnu::noinline]] bool operator==(const MersenneHash& other) const {
 #ifdef BT_INSTRUMENT
     ++mersenne_hash_comparisons;
 #endif
     if (hash_ != other.hash_) {
       return false;
     }
-    size_t byte_index = start_ / 8;
-    size_t bit_index = start_ % 8;
-    size_t other_byte_index = other.start_ / 8;
-    size_t other_bit_index = other.start_ % 8;
 
+    size_t pos = 0;
     bool is_same = true;
-    for (size_t i = 0; i < length_; ++i) {
-      if (get_bit(text_, byte_index, bit_index) !=
-          get_bit(other.text_, other_byte_index, other_bit_index)) {
+    for (size_t remaining = length_; remaining > 64;
+         pos += 64, remaining -= 64) {
+      if (slice_at(*text_, start_ + pos) !=
+          slice_at(*other.text_, other.start_ + pos)) {
         is_same = false;
-        break;
-      }
-      ++bit_index;
-      ++other_bit_index;
-      if (bit_index == 8) {
-        bit_index = 0;
-        ++byte_index;
-      }
-
-      if (other_bit_index == 8) {
-        other_bit_index = 0;
-        ++other_byte_index;
+        goto mersenne_hash_cmp_done;
       }
     }
 
+    for (size_t i = pos; i < length_; ++i) {
+      if (get_bit(*text_, start_ + i) !=
+          get_bit(*other.text_, other.start_ + i)) {
+        is_same = false;
+        goto mersenne_hash_cmp_done;
+      }
+    }
+
+  mersenne_hash_cmp_done:
 #ifdef BT_INSTRUMENT
     if (!is_same) {
       // The hash is the same but the substring isn't => collision
@@ -196,16 +185,28 @@ public:
     return is_same;
   };
 
-  [[nodiscard]] constexpr std::span<const std::byte> overlapping_range() const {
-    return text_.subspan(start_ / 8, ((length_ - 1) / 8) + 1);
+private:
+  static bool get_bit(const pasta::BitVector& v, const size_t bit_index) {
+    return v[bit_index];
   }
 
-private:
-  constexpr static bool get_bit(const std::span<const std::byte> v,
-                                const size_t byte_index,
-                                const size_t bit_index) {
-    return (v[byte_index] & std::byte{static_cast<uint8_t>(1 << bit_index)}) >
-           std::byte{0};
+  static size_t ceil_div(std::integral auto x, std::integral auto y) {
+    return 1 + ((x - 1) / y);
+  }
+
+  static uint64_t slice_at(const pasta::BitVector& bv, const size_t i) {
+    const std::span<uint64_t> backing = bv.data();
+    const uint8_t offset = i % 64;
+    const size_t data_index = i / 64;
+    // TODO Check if the right shift actually shifts in zeros
+    const uint64_t r =
+        backing[data_index] & (~static_cast<uint64_t>(0) << offset);
+    if (offset == 0) {
+      const uint64_t l = backing[data_index + 1] &
+                         (~static_cast<uint64_t>(0) >> (63 - offset));
+      return (l << (63 - offset)) | (r >> offset);
+    }
+    return r;
   }
 };
 

@@ -21,7 +21,7 @@
 #pragma once
 
 #include "pasta/bit_vector/bit_vector.hpp"
-#include "pasta/block_tree/bit_block_tree.hpp"
+#include "pasta/block_tree/rec_bit_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 #include "pasta/block_tree/utils/byteread.hpp"
@@ -1378,6 +1378,8 @@ private:
            b++) {
         if (static_cast<size_t>(block_start + b) < text.size()) {
           this->leaves_.push_back(text[block_start + b]);
+        } else {
+          this->leaves_.push_back(0);
         }
       }
     }

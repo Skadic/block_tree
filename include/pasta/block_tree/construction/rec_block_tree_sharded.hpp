@@ -24,11 +24,13 @@
 #include "pasta/block_tree/rec_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
+#include "pasta/block_tree/utils/byteread.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <atomic>
 #include <concepts>
+#include <iostream>
 #include <list>
 #include <memory>
 #include <omp.h>
@@ -126,9 +128,6 @@ class RecursiveBlockTreeSharded
   template <typename key_type, typename value_type>
   using SeqHashMap =
       ankerl::unordered_dense::map<key_type, value_type, std::hash<key_type>>;
-  // robin_hood::unordered_flat_map<key_type, value_type,
-  // std::hash<key_type>>;
-  // std::unordered_map<key_type, value_type, std::hash<key_type>>;
 
   /// @brief A rabin karp hasher preconfigured for the current template
   ///   parameters
@@ -490,15 +489,19 @@ private:
 #endif
 
       // Generate the next level (if we're not at the last level)
-      if (level < static_cast<size_t>(tree_height) - 1) {
+      if (level < static_cast<size_t>(tree_height) - 1 &&
+          levels.back().block_size > this->max_leaf_length_ * this->tau_) {
         levels.push_back(std::move(generate_next_level(text, current)));
-      }
 #ifdef BT_INSTRUMENT
-      generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         Clock::now() - now)
-                         .count();
+        generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           Clock::now() - now)
+                           .count();
 #endif
+      } else {
+        break;
+      }
     }
+
 #ifdef BT_INSTRUMENT
 #  if defined(BT_DBG)
     std::cout << "pairs: " << (pairs_ns / 1'000'000)
@@ -1361,7 +1364,9 @@ private:
       found_back_block |= static_cast<size_t>(new_num_internal[level_index]) <
                           levels[level_index].is_internal->size();
       if (!found_back_block) {
-        level.is_internal.reset();
+        if (level_index < levels.size() - 1) {
+          level.is_internal.reset();
+        }
         level.is_internal_rank.reset();
         level.pointers.reset();
         level.offsets.reset();
@@ -1407,6 +1412,8 @@ private:
            b++) {
         if (static_cast<size_t>(block_start + b) < text.size()) {
           this->leaves_.push_back(text[block_start + b]);
+        } else {
+          this->leaves_.push_back(0);
         }
       }
     }

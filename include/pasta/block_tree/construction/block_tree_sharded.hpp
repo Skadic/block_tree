@@ -21,14 +21,13 @@
 #pragma once
 
 #include "pasta/bit_vector/bit_vector.hpp"
-#include "pasta/block_tree/block_tree.hpp"
+#include "pasta/block_tree/rec_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <atomic>
-#include <concepts>
 #include <list>
 #include <memory>
 #include <omp.h>
@@ -1384,6 +1383,8 @@ private:
            b++) {
         if (static_cast<size_t>(block_start + b) < text.size()) {
           this->leaves_.push_back(text[block_start + b]);
+        } else {
+          this->leaves_.push_back(0);
         }
       }
     }
