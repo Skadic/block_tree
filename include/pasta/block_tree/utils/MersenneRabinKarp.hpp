@@ -31,7 +31,7 @@ namespace pasta {
 __extension__ typedef unsigned __int128 uint128_t;
 
 template <uint8_t exponent>
-static consteval uint128_t primer() {
+static consteval uint128_t mersenne_prime() {
   uint128_t res = 1;
   for (size_t i = 0; i < exponent; i++) {
     res <<= 1;
@@ -122,7 +122,7 @@ public:
     if constexpr (mersenne_exponent == 0) {
       return k % prime_;
     } else {
-      constexpr uint128_t MERSENNE = primer<mersenne_exponent>();
+      constexpr uint128_t MERSENNE = mersenne_prime<mersenne_exponent>();
       uint128_t i = (k & MERSENNE) + (k >> mersenne_exponent);
       i -= (i >= MERSENNE) * MERSENNE;
       return i;
@@ -149,7 +149,7 @@ public:
     if constexpr (mersenne_exponent == 0) {
       fp += prime_ * (out_char_influence > hash_) - out_char_influence;
     } else {
-      fp += primer<mersenne_exponent>() * (out_char_influence > hash_) -
+      fp += mersenne_prime<mersenne_exponent>() * (out_char_influence > hash_) -
             out_char_influence;
     }
     fp *= sigma_;
@@ -230,7 +230,7 @@ public:
     if constexpr (mersenne_exponent == 0) {
       return k % prime_;
     } else {
-      constexpr uint128_t MERSENNE = primer<mersenne_exponent>();
+      constexpr uint128_t MERSENNE = mersenne_prime<mersenne_exponent>();
       uint128_t i = (k & MERSENNE) + (k >> mersenne_exponent);
       i -= (i >= MERSENNE) * MERSENNE;
       return i;
@@ -257,7 +257,7 @@ public:
     if constexpr (mersenne_exponent == 0) {
       fp += prime_ * (out_char_influence > hash_) - out_char_influence;
     } else {
-      fp += primer<mersenne_exponent>() * (out_char_influence > hash_) -
+      fp += mersenne_prime<mersenne_exponent>() * (out_char_influence > hash_) -
             out_char_influence;
     }
     fp *= 2;
