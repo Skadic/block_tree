@@ -27,6 +27,7 @@
 #include <pasta/bit_vector/support/optimized_for.hpp>
 #include <pasta/bit_vector/support/rank_select.hpp>
 #include <pasta/bit_vector/support/wide_rank_select.hpp>
+#include <pasta/block_tree/rec_bit_block_tree.hpp>
 #include <sdsl/int_vector.hpp>
 #include <vector>
 

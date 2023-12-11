@@ -23,9 +23,6 @@
 
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 
-#include <bit>
-#include <iostream>
-
 namespace pasta {
 
 __extension__ typedef unsigned __int128 uint128_t;

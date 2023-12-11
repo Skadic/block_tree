@@ -22,7 +22,7 @@
 #include <fstream>
 #include <iostream>
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
-#include <pasta/block_tree/construction/dense_bit_block_tree_sharded.hpp>
+#include <pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp>
 #include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
 #include <syncstream>
 
@@ -206,7 +206,7 @@ using Clock = std::chrono::high_resolution_clock;
 using TimePoint = Clock::time_point;
 using Duration = Clock::duration;
 
-using A = pasta::DenseBitBlockTreeSharded<int32_t>;
+using A = pasta::RecursiveDenseBitBlockTreeSharded<int32_t, 0>;
 
 int main(int argc, char** argv) {
   using namespace pasta;
@@ -328,16 +328,17 @@ int main(int argc, char** argv) {
   if (make_bv) {
     // Make bit vector block tree
 
-    auto bt = std::make_unique<
-        RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>(*bv,
-                                                                 arity,
-                                                                 1,
-                                                                 leaf_length,
-                                                                 threads,
-                                                                 queue_size);
-
-    // auto bt =
-    //     std::make_unique<A>(*bv, arity, 1, leaf_length, threads, queue_size);
+    /*
+        auto bt = std::make_unique<
+            RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>(*bv,
+                                                                     arity,
+                                                                     1,
+                                                                     leaf_length,
+                                                                     threads,
+                                                                     queue_size);
+    */
+    auto bt =
+        std::make_unique<A>(*bv, arity, 1, leaf_length, threads, queue_size);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();

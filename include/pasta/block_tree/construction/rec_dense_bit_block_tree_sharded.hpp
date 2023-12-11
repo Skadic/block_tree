@@ -1,3 +1,4 @@
+
 /*******************************************************************************
  * This file is part of pasta::block_tree
  *
@@ -21,10 +22,9 @@
 #pragma once
 
 #include "pasta/bit_vector/bit_vector.hpp"
-#include "pasta/block_tree/rec_bit_block_tree.hpp"
+#include "pasta/block_tree/rec_dense_bit_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
-#include "pasta/block_tree/utils/byteread.hpp"
 #include "pasta/block_tree/utils/sharded_util.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
@@ -33,7 +33,6 @@
 #include <cstdint>
 #include <memory>
 #include <omp.h>
-#include <robin_hood.h>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 #include <tlx/math/aggregate.hpp>
@@ -48,8 +47,8 @@ namespace pasta {
 /// @tparam size_type The type used for indices etc. (must be a signed integer)
 ///   in the sharded hash map.
 template <std::signed_integral size_type, uint8_t recursion_level>
-class RecursiveBitBlockTreeSharded
-    : public RecursiveBitBlockTree<size_type, recursion_level> {
+class RecursiveDenseBitBlockTreeSharded
+    : public RecursiveDenseBitBlockTree<size_type, recursion_level> {
   // clang-format off
   // ---------------------------------- Type Defs ----------------------------------
   // clang-format on
@@ -67,9 +66,9 @@ class RecursiveBitBlockTreeSharded
   using BlockOccurrences = internal::sharded::BlockOccurrences<size_type>;
   using PairOccurrences = internal::sharded::PairOccurrences<size_type>;
   using UpdateBlockOccurrences =
-      internal::sharded::UpdateBlockOccurrences<uint8_t, size_type>;
+      internal::sharded::UpdateBlockOccurrences<bool, size_type>;
   using UpdatePairOccurrences =
-      internal::sharded::UpdatePairOccurrences<uint8_t, size_type>;
+      internal::sharded::UpdatePairOccurrences<bool, size_type>;
 
   /// @brief A sequential hash map used as backing for the sharded hash map.
   template <typename key_type, typename value_type>
@@ -79,9 +78,9 @@ class RecursiveBitBlockTreeSharded
   /// @brief A rabin karp hasher preconfigured for the current template
   ///   parameters
   using RabinKarp =
-      MersenneRabinKarp<uint8_t, size_type, internal::sharded::PRIME_EXPONENT>;
+      MersenneRabinKarp<bool, size_type, internal::sharded::PRIME_EXPONENT>;
   /// @brief A rabin karp hash for the preconfigured rabin karp hasher
-  using RabinKarpHash = MersenneHash<uint8_t>;
+  using RabinKarpHash = MersenneHash<bool>;
 
   /// @brief A hash map with rabin karp hashes as keys
   template <typename value_type,
@@ -116,7 +115,7 @@ public:
   /// @param threads The number of threads to use for construction
   /// @param queue_size The max number of items in each thread's queue for its
   /// hash map
-  void construct(const std::span<const uint8_t> text,
+  void construct(const pasta::BitVector& text,
                  const size_t threads,
                  const size_t queue_size) {
 #ifdef BT_INSTRUMENT
@@ -140,7 +139,8 @@ public:
     // Prepare the top level
     levels.emplace_back(0, top_block_size, text_len / top_block_size);
     LevelData& top_level = levels.back();
-    top_level.block_starts->reserve(ceil_div(text_len, top_level.block_size));
+    top_level.block_starts->reserve(
+        internal::sharded::ceil_div(text_len, top_level.block_size));
     for (size_type i = 0; i < text_len; i += top_level.block_size) {
       top_level.block_starts->push_back(i);
     }
@@ -187,11 +187,11 @@ public:
                                               threads,
                                               queue_size);
       } else {
-        scan_block_pairs<UseHash::IDENTITY>(text,
-                                            current,
-                                            is_padded,
-                                            threads,
-                                            queue_size);
+        scan_block_pairs<UseHash::RABIN_KARP>(text,
+                                              current,
+                                              is_padded,
+                                              threads,
+                                              queue_size);
       }
 #ifdef BT_INSTRUMENT
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -206,11 +206,11 @@ public:
                                          threads,
                                          queue_size);
       } else {
-        scan_blocks<UseHash::IDENTITY>(text,
-                                       current,
-                                       is_padded,
-                                       threads,
-                                       queue_size);
+        scan_blocks<UseHash::RABIN_KARP>(text,
+                                         current,
+                                         is_padded,
+                                         threads,
+                                         queue_size);
       }
 #ifdef BT_INSTRUMENT
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -286,13 +286,6 @@ public:
 #endif
   }
 
-  /// @brief Returns the ceiling of x / y for x > 0;
-  ///
-  /// https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-  inline static size_t ceil_div(std::integral auto x, std::integral auto y) {
-    return 1 + ((x - 1) / y);
-  }
-
   [[maybe_unused]] static void
   print_aggregate(const char* name,
                   const tlx::Aggregate<size_t>& agg,
@@ -321,7 +314,7 @@ public:
   ///   For block sizes greater than 4 bytes, use Rabin-Karp.
   ///
   template <UseHash use_hash = UseHash::RABIN_KARP>
-  void scan_block_pairs(const std::span<const uint8_t> text,
+  void scan_block_pairs(const pasta::BitVector& text,
                         LevelData& level,
                         const bool is_padded,
                         const size_t threads,
@@ -378,8 +371,9 @@ public:
 
       // Hash every window and determine for all block pairs whether
       // they have previous occurrences.
-      const size_t segment_size =
-          std::max<size_t>(1, ceil_div(num_block_pairs, num_threads));
+      const size_t segment_size = std::max<size_t>(
+          1,
+          internal::sharded::ceil_div(num_block_pairs, num_threads));
 
       // Start and end index of the current thread's segment
       const auto start = thread_id * segment_size;
@@ -388,7 +382,6 @@ public:
 
       if constexpr (use_hash == UseHash::RABIN_KARP) {
         RabinKarp rk(text,
-                     internal::sharded::SIGMA,
                      block_starts[0],
                      pair_size,
                      internal::sharded::PRIME);
@@ -405,7 +398,7 @@ public:
           // doesn't exist, and add the current block to the entry
           shard.insert(hash, i);
         }
-      } else {
+      } /*else {
         const uint64_t HASH_MASK = internal::sharded::HASH_MASKS[pair_size];
         for (size_t i = start; i < end; ++i) {
           const size_t block_start = block_starts[i];
@@ -420,7 +413,7 @@ public:
           // doesn't exist, and add the current block to the entry
           shard.insert(hash, i);
         }
-      }
+      }*/
 
       if (const size_t thread_order =
               threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -454,7 +447,6 @@ public:
       if (start < static_cast<size_t>(num_block_pairs)) {
         if constexpr (use_hash == UseHash::RABIN_KARP) {
           RabinKarp rk(text,
-                       internal::sharded::SIGMA,
                        block_starts[start],
                        pair_size,
                        internal::sharded::PRIME);
@@ -622,46 +614,46 @@ public:
       occurrences.update(current_block_index);
     }
   }
-
-  static inline void
-  scan_windows_in_block_pair_identity(const std::span<const uint8_t>& text,
-                                      const size_t block_start,
-                                      const size_t pair_size,
-                                      BlockPairMap& map,
-                                      const size_t num_iterations,
-                                      const size_type current_block_index
-#ifdef BT_INSTRUMENT
-                                      ,
-                                      tlx::Aggregate<size_t>& agg
-#endif
-  ) {
-    const uint64_t HASH_MASK = internal::sharded::HASH_MASKS[pair_size];
-    const uint8_t* block_start_ptr = text.data() + block_start;
-    for (size_t offset = 0; offset < num_iterations; ++offset) {
-      const uint64_t hash_value =
-          pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
-      RabinKarpHash current_hash(text,
-                                 internal::sharded::mix_select(hash_value),
-                                 block_start + offset,
-                                 pair_size);
-      // Find the hash of the current window among the hashed block
-      // pairs.
-      auto found = map.find(current_hash);
-      if (found == map.end()) {
-#ifdef BT_INSTRUMENT
-        agg.add(0);
-        continue;
-      } else {
-        agg.add(100);
-#else
-        continue;
-#endif
+  /*
+    static inline void
+    scan_windows_in_block_pair_identity(const pasta::BitVector& text,
+                                        const size_t block_start,
+                                        const size_t pair_size,
+                                        BlockPairMap& map,
+                                        const size_t num_iterations,
+                                        const size_type current_block_index
+  #ifdef BT_INSTRUMENT
+                                        ,
+                                        tlx::Aggregate<size_t>& agg
+  #endif
+    ) {
+      const uint64_t HASH_MASK = internal::sharded::HASH_MASKS[pair_size];
+      const uint8_t* block_start_ptr = text.data() + block_start;
+      for (size_t offset = 0; offset < num_iterations; ++offset) {
+        const uint64_t hash_value =
+            pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
+        RabinKarpHash current_hash(text,
+                                   internal::sharded::mix_select(hash_value),
+                                   block_start + offset,
+                                   pair_size);
+        // Find the hash of the current window among the hashed block
+        // pairs.
+        auto found = map.find(current_hash);
+        if (found == map.end()) {
+  #ifdef BT_INSTRUMENT
+          agg.add(0);
+          continue;
+        } else {
+          agg.add(100);
+  #else
+          continue;
+  #endif
+        }
+        PairOccurrences& occurrences = found->second;
+        occurrences.update(current_block_index);
       }
-      PairOccurrences& occurrences = found->second;
-      occurrences.update(current_block_index);
     }
-  }
-
+  */
   /// @brief Determine the positions for each block's earliest occurrence if
   /// there is any.
   ///
@@ -675,7 +667,7 @@ public:
   /// text windows or to use the block's content as a hash. For any window size
   /// greater than 8 bytes, use Rabin-Karp.
   template <UseHash use_hash = UseHash::RABIN_KARP>
-  void scan_blocks(std::span<const uint8_t> text,
+  void scan_blocks(const pasta::BitVector& text,
                    LevelData& level_data,
                    const bool is_padded,
                    const size_t threads,
@@ -738,7 +730,8 @@ public:
       // Number of total iterations the for loop should do
       const size_t num_total_iterations = level_data.num_blocks - is_padded - 1;
       // The number of iterations each thread should do
-      const size_t segment_size = ceil_div(num_total_iterations, num_threads);
+      const size_t segment_size =
+          internal::sharded::ceil_div(num_total_iterations, num_threads);
       // The start and end index of the current thread's segment
       const size_t start = thread_id * segment_size;
       const size_t end = std::min<size_t>(num_total_iterations,
@@ -747,7 +740,6 @@ public:
       // Hash each block and store their hashes in the map
       if constexpr (use_hash == UseHash::RABIN_KARP) {
         RabinKarp rk(text,
-                     internal::sharded::SIGMA,
                      block_starts[0],
                      block_size,
                      internal::sharded::PRIME);
@@ -756,7 +748,7 @@ public:
           RabinKarpHash hash = rk.current_hash();
           shard.insert(hash, {i, 0});
         }
-      } else {
+      } /*else {
         const uint64_t HASH_MASK = internal::sharded::HASH_MASKS[block_size];
         for (size_t i = start; i < end; ++i) {
           const size_t block_start = block_starts[i];
@@ -770,7 +762,7 @@ public:
 
           shard.insert(hash, {i, 0});
         }
-      }
+      }*/
 
       if (const size_t thread_order =
               num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -805,7 +797,6 @@ public:
       if (start < block_starts.size() - is_padded) {
         if constexpr (use_hash == UseHash::RABIN_KARP) {
           RabinKarp rk(text,
-                       internal::sharded::SIGMA,
                        block_starts[start],
                        block_size,
                        internal::sharded::PRIME);
@@ -946,44 +937,45 @@ public:
       occurrences.update(current_block_index, offset);
     }
   }
-
-  static void
-  scan_windows_in_block_identity(const std::span<const uint8_t>& text,
-                                 const size_t block_start,
-                                 BlockMap& links,
-                                 LevelData& level_data,
-                                 const size_type current_block_index
-#ifdef BT_INSTRUMENT
-                                 ,
-                                 tlx::Aggregate<size_t>& hits
-#endif
-  ) {
-    const uint64_t HASH_MASK =
-        internal::sharded::HASH_MASKS[level_data.block_size];
-    const uint8_t* block_start_ptr = text.data() + block_start;
-    for (size_type offset = 0; offset < level_data.block_size; ++offset) {
-      const uint64_t hash_value =
-          pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
-      RabinKarpHash hash(text,
-                         internal::sharded::mix_select(hash_value),
-                         block_start + offset,
-                         level_data.block_size);
-      // Find all blocks in the multimap that match our hash
-      auto found = links.find(hash);
-      if (found == links.end()) {
-#ifdef BT_INSTRUMENT
-        hits.add(0.0);
-        continue;
-      } else {
-        hits.add(100.0);
-#else
-        continue;
-#endif
+  /*
+    static void
+    scan_windows_in_block_identity(const std::span<const uint8_t>& text,
+                                   const size_t block_start,
+                                   BlockMap& links,
+                                   LevelData& level_data,
+                                   const size_type current_block_index
+  #ifdef BT_INSTRUMENT
+                                   ,
+                                   tlx::Aggregate<size_t>& hits
+  #endif
+    ) {
+      const uint64_t HASH_MASK =
+          internal::sharded::HASH_MASKS[level_data.block_size];
+      const uint8_t* block_start_ptr = text.data() + block_start;
+      for (size_type offset = 0; offset < level_data.block_size; ++offset) {
+        const uint64_t hash_value =
+            pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
+        RabinKarpHash hash(text,
+                           internal::sharded::mix_select(hash_value),
+                           block_start + offset,
+                           level_data.block_size);
+        // Find all blocks in the multimap that match our hash
+        auto found = links.find(hash);
+        if (found == links.end()) {
+  #ifdef BT_INSTRUMENT
+          hits.add(0.0);
+          continue;
+        } else {
+          hits.add(100.0);
+  #else
+          continue;
+  #endif
+        }
+        BlockOccurrences& occurrences = found->second;
+        occurrences.update(current_block_index, offset);
       }
-      BlockOccurrences& occurrences = found->second;
-      occurrences.update(current_block_index, offset);
     }
-  }
+  */
 
   /// @brief Generate the block size, number of block and block start indices
   /// for the next level.
@@ -994,9 +986,8 @@ public:
   /// @param text The input text.
   /// @param level The level data of the current level.
   /// @return The level data of the next level.
-  [[nodiscard]] LevelData
-  generate_next_level(const std::span<const uint8_t> text,
-                      const LevelData& level) const {
+  [[nodiscard]] LevelData generate_next_level(const pasta::BitVector& text,
+                                              const LevelData& level) const {
     const size_t block_size = level.block_size;
     const size_t num_blocks = level.num_blocks;
     const auto& is_internal = *level.is_internal;
@@ -1035,7 +1026,7 @@ public:
   /// @param[in] levels A vector containing data for each level, with the
   /// first entry corresponding to the topmost level.
   ///
-  void make_tree(const std::span<const uint8_t> text,
+  void make_tree(const pasta::BitVector& text,
                  std::vector<LevelData>& levels,
                  const int64_t padding,
                  const size_t threads,
@@ -1076,14 +1067,14 @@ public:
       sdsl::util::bit_compress(*pointers);
       sdsl::util::bit_compress(*offsets);
       if constexpr (recursion_level > 0) {
-        auto* bt =
-            new RecursiveBitBlockTreeSharded<size_type, recursion_level - 1>(
-                *top_level.is_internal,
-                this->tau_,
-                this->s_,
-                this->max_leaf_length_,
-                threads,
-                queue_size);
+        auto* bt = new RecursiveDenseBitBlockTreeSharded<size_type,
+                                                         recursion_level - 1>(
+            *top_level.is_internal,
+            this->tau_,
+            this->s_,
+            this->max_leaf_length_,
+            threads,
+            queue_size);
         this->block_tree_types_.push_back(bt);
         this->block_tree_types_.back()->add_bit_rank_support(threads);
         this->block_tree_types_rs_.push_back(bt);
@@ -1142,6 +1133,13 @@ public:
     int64_t leaf_count = 0;
     auto& last_is_internal = *levels.back().is_internal;
     std::vector<size_type>& last_block_starts = *levels.back().block_starts;
+    size_t bit_index = 0;
+    const size_t final_num_internals =
+        levels.back().is_internal_rank->rank1(last_is_internal.size());
+    this->leaf_bits_ = std::make_unique<BitVector>(
+        final_num_internals * this->leaf_size * this->tau_,
+        false);
+    std::cout << "leaf bit size: " << this->leaf_bits_->size() << std::endl;
     for (size_t block = 0; block < last_is_internal.size(); block++) {
       if (!last_is_internal[block]) {
         continue;
@@ -1154,19 +1152,20 @@ public:
       for (size_t b = 0; b < static_cast<size_t>(this->leaf_size * this->tau_);
            b++) {
         if (static_cast<size_t>(block_start + b) < text.size()) {
-          this->leaves_.push_back(text[block_start + b]);
+          (*this->leaf_bits_)[bit_index++] =
+              static_cast<bool>(text[block_start + b]);
         } else {
-          this->leaves_.push_back(0);
+          (*this->leaf_bits_)[bit_index++] = false;
         }
       }
     }
+    std::cout << "leaf count: " << leaf_count << std::endl;
     if constexpr (recursion_level == 0) {
       if (levels.size() == 1) {
         top_level.is_internal.release();
       }
     }
     this->amount_of_leaves = leaf_count;
-    this->compress_leaves();
   }
 
   /// @brief Generates a level and adds the relevant data to the block tree.
@@ -1192,7 +1191,9 @@ public:
       const size_type last_block_parent_start =
           previous_level.block_starts->back();
       const size_type block_size = level.block_size;
-      new_size += ceil_div(text_len - last_block_parent_start, block_size);
+      new_size +=
+          internal::sharded::ceil_div(text_len - last_block_parent_start,
+                                      block_size);
     }
     previous_level.block_starts.reset();
     const size_type num_internal = new_num_internal[level_index];
@@ -1246,7 +1247,7 @@ public:
     sdsl::util::bit_compress(*offsets);
     if constexpr (recursion_level > 0) {
       auto* bt =
-          new RecursiveBitBlockTreeSharded<size_type, recursion_level - 1>(
+          new RecursiveDenseBitBlockTreeSharded<size_type, recursion_level - 1>(
               *is_internal,
               this->tau_,
               this->s_,
@@ -1370,12 +1371,12 @@ public:
   }
 
 public:
-  RecursiveBitBlockTreeSharded(const pasta::BitVector& text,
-                               const size_t arity,
-                               const size_t root_arity,
-                               const size_t max_leaf_length,
-                               const size_t threads,
-                               const size_t queue_size) {
+  RecursiveDenseBitBlockTreeSharded(const pasta::BitVector& text,
+                                    const size_t arity,
+                                    const size_t root_arity,
+                                    const size_t max_leaf_length,
+                                    const size_t threads,
+                                    const size_t queue_size) {
     const auto old = omp_get_max_threads();
     const auto old_dynamic = omp_get_dynamic();
     omp_set_dynamic(0);
@@ -1384,9 +1385,7 @@ public:
     this->s_ = root_arity;
     this->max_leaf_length_ = max_leaf_length;
     this->num_bits_ = text.size();
-    const std::span bytes(reinterpret_cast<const uint8_t*>(text.data().data()),
-                          ceil_div(text.size(), 8ULL));
-    construct(bytes, threads, queue_size);
+    construct(text, threads, queue_size);
     omp_set_dynamic(old_dynamic);
     omp_set_num_threads(old);
   }
