@@ -25,10 +25,12 @@
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 #include "pasta/block_tree/utils/byteread.hpp"
+#include "pasta/block_tree/utils/sharded_util.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
 #include <ankerl/unordered_dense.h>
 #include <atomic>
+#include <cstdint>
 #include <list>
 #include <memory>
 #include <omp.h>
@@ -49,17 +51,8 @@ namespace pasta {
 template <std::signed_integral size_type, uint8_t recursion_level>
 class RecursiveBitBlockTreeSharded
     : public RecursiveBitBlockTree<size_type, recursion_level> {
-  using Clock = std::chrono::high_resolution_clock;
-  using TimePoint = Clock::time_point;
 
-  /// @brief Determine whether to use a Rabin-Karp hash for hashing text windows
-  /// or just use the block's content itself as a hash, stored in an integer.
-  enum class UseHash {
-    /// @brief Use a Rabin-Karp hash
-    RABIN_KARP,
-    /// @brief Use the block's content as a hash
-    IDENTITY
-  };
+  // ---------------------------------- Constants ----------------------------------
 
   /// @brief For some block size (in bytes) i, return the number of trailing
   ///   zeros in a 64 bit integer when zeroing out characters that are not part
@@ -95,25 +88,35 @@ class RecursiveBitBlockTreeSharded
   /// @brief Masks for identity hashes for a block size i (in bytes)
   constexpr static std::array<uint64_t, 9> HASH_MASKS = masks();
 
-  /// @brief A marker for a block that has no earlier occurrence
-  constexpr static size_type NO_EARLIER_OCC = -1;
-  /// @brief A marker for a block that has been pruned
-  constexpr static size_type PRUNED = -2;
-
   /// @brief Base of the polynomial used for the Rabin-Karp hasher
   constexpr static size_type SIGMA = 256;
 
   /// @brief The exponent of the mersenne prime used for the Rabin-Karp hasher
   constexpr static uint8_t PRIME_EXPONENT = 107;
-  // constexpr static uint8_t PRIME_EXPONENT = 89;
-  // constexpr static uint8_t PRIME_EXPONENT = 61;
+
   /// @brief A mersenne prime used for the Rabin-Karp hasher
-  constexpr static uint128_t PRIME = pasta::primer<PRIME_EXPONENT>();
+  constexpr static uint128_t PRIME = pasta::mersenne_prime<PRIME_EXPONENT>();
+
+  // ---------------------------------- End Constants ----------------------------------
+
+  // ---------------------------------- Type Defs ----------------------------------
+
+  using Clock = std::chrono::high_resolution_clock;
+  using TimePoint = Clock::time_point;
 
   /// @brief A bit vector
   using BitVector = pasta::BitVector;
   /// @brief A rank data structure for a bit vector
   using Rank = pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>;
+
+  using UseHash = internal::sharded::UseHash;
+  using LevelData = internal::sharded::LevelData<size_type, Rank>;
+  using BlockOccurrences = internal::sharded::BlockOccurrences<size_type>;
+  using PairOccurrences = internal::sharded::PairOccurrences<size_type>;
+  using UpdateBlockOccurrences =
+      internal::sharded::UpdateBlockOccurrences<uint8_t, size_type>;
+  using UpdatePairOccurrences =
+      internal::sharded::UpdatePairOccurrences<uint8_t, size_type>;
 
   /// @brief A sequential hash map used as backing for the sharded hash map.
   template <typename key_type, typename value_type>
@@ -133,14 +136,12 @@ class RecursiveBitBlockTreeSharded
   using RabinKarpMap =
       SyncShardedMap<RabinKarpHash, value_type, seq_map_type, update_fn_type>;
 
-  static uint64_t mix_select(uint64_t key) {
-    key ^= (key >> 31);
-    key *= 0x7fb5d329728ea185;
-    key ^= (key >> 27);
-    key *= 0x81dadef4bc2dd44d;
-    key ^= (key >> 33);
-    return key;
-  }
+  /// @brief A map containing hashed block pairs mapped to their occurrences
+  using BlockPairMap = RabinKarpMap<PairOccurrences, UpdatePairOccurrences>;
+  /// @brief A map containing hashed blocks mapped to their occurrences
+  using BlockMap = RabinKarpMap<BlockOccurrences, UpdateBlockOccurrences>;
+
+  // ---------------------------------- End Type Defs ----------------------------------
 
 #ifdef BT_INSTRUMENT
 public:
@@ -153,219 +154,6 @@ public:
   size_t b_scan_blocks_ns = 0;
   size_t b_update_blocks_ns = 0;
 #endif
-
-private:
-  /// @brief Contains data about a block tree level under construction
-  struct LevelData {
-    /// @brief Contains a 1 for each internal block (= block with children)
-    ///   and a 0 for each block that has a back pointer
-    std::unique_ptr<BitVector> is_internal;
-    /// @brief Rank data structure for is_internal
-    std::unique_ptr<Rank> is_internal_rank;
-    /// @brief The block from which a back block is copying
-    std::unique_ptr<std::vector<size_type>> pointers;
-    /// @brief The offset into the block from which the back block is copying
-    std::unique_ptr<std::vector<size_type>> offsets;
-    /// @brief The number of back blocks pointing to the block
-    std::unique_ptr<std::vector<size_type>> counters;
-    /// @brief Block start indices
-    std::unique_ptr<std::vector<size_type>> block_starts;
-    /// @brief The block size on this level
-    int64_t block_size;
-    /// @brief The index of the current level.
-    /// First level is 0, second level is 1 etc.
-    int64_t level_index;
-    /// @brief The number of blocks on the current level
-    int64_t num_blocks;
-
-    LevelData(const int64_t level_index_,
-              const int64_t block_size_,
-              const int64_t num_blocks_)
-        : is_internal(nullptr),
-          is_internal_rank(nullptr),
-          pointers(new std::vector<size_type>()),
-          offsets(new std::vector<size_type>()),
-          counters(new std::vector<size_type>()),
-          block_starts(new std::vector<size_type>()),
-          block_size(block_size_),
-          level_index(level_index_),
-          num_blocks(num_blocks_) {}
-
-    /// @brief Checks whether a block is adjacent in the text
-    ///   to its successor on this level
-    [[nodiscard]] bool next_is_adjacent(size_t i) const {
-      return (*block_starts)[i] + block_size == (*block_starts)[i + 1];
-    }
-  };
-
-  /// @brief Contains data about the occurrences of a hashed block pair
-  struct PairOccurrences {
-    /// @brief The first block in the text in which the content appears
-    size_type first_occ_block;
-    /// @brief A list of block indices in which the content of the hashed block
-    /// pair appears
-    ///
-    /// We're using an std::list here instead of an std::vector, since the
-    /// reallocation upon insertion lead to issues during parallel access, when
-    /// another thread tries to access the vector during reallocation.
-    std::list<size_type> occurrences;
-
-    /// @brief Initialize the occurrences of a hashed block pair.
-    ///
-    /// Note, that this only sets the first occurrence to the given block index,
-    /// but does not add it to the occurrences list.
-    /// @param first_occ_block_ The block index of the pair's first block.
-    inline explicit PairOccurrences(size_type first_occ_block_)
-        : first_occ_block(first_occ_block_),
-          occurrences() {}
-
-    PairOccurrences(PairOccurrences&&) noexcept = default;
-    PairOccurrences& operator=(PairOccurrences&&) = default;
-
-    /// @brief Add a block index to the occurrences.
-    /// @param block_index The block index to add to the occurrences.
-    void add_block_pair(size_type block_index) {
-      occurrences.push_back(block_index);
-    }
-
-    /// @brief If the given block index is an earlier occurrence, update it
-    /// @param block_index The block index of an occurrence
-    void update(size_type block_index) {
-      first_occ_block = std::min<size_type>(first_occ_block, block_index);
-    }
-  };
-
-  /// @brief Contains data about the occurrences of a hashed block
-  struct BlockOccurrences {
-    /// @brief Represents the first occurrence of a block
-    struct FirstOccurrence {
-      /// @brief Block index of the first occurrence of the block's content
-      size_type block;
-      /// @brief The offset into the block at which that first occurrence occurs
-      size_type offset;
-
-      inline FirstOccurrence(size_type first_occ_block_,
-                             size_type first_occ_offset_)
-          : block(first_occ_block_),
-            offset(first_occ_offset_) {}
-    };
-
-    // @brief The block index and offset of the first occurrence of this block's
-    //   content
-    std::atomic<FirstOccurrence> first_occ;
-
-    /// @brief A list of block indices in which the content of the hashed block
-    ///   occurs
-    std::list<size_type> occurrences;
-
-    /// @brief Initialize the occurrences of a hashed block.
-    ///
-    /// Note, that this only sets the first occurrence to the given block index,
-    /// but does not add it to the occurrences list.
-    /// @param first_occ_block_ The block index of the block's first occurrence.
-    explicit BlockOccurrences(size_type first_occ_block_)
-        : first_occ({first_occ_block_, 0}),
-          occurrences() {}
-
-    BlockOccurrences(const BlockOccurrences& other)
-        : first_occ(other.first_occ.load()),
-          occurrences(other.occurrences) {}
-
-    BlockOccurrences(BlockOccurrences&& other) noexcept
-        : first_occ(other.first_occ.load()),
-          occurrences(std::move(other.occurrences)) {}
-
-    ~BlockOccurrences() = default;
-
-    BlockOccurrences& operator=(BlockOccurrences&& other) noexcept {
-      first_occ = other.first_occ.load();
-      occurrences = std::move(other.occurrences);
-      return *this;
-    }
-
-    /// @brief Add a block index to the occurrences.
-    /// @param block_index The block index to add to the occurrences.
-    void add_block(size_type block_index) {
-      occurrences.push_back(block_index);
-    }
-
-    /// @brief If the given block index and offset are an earlier occurrence,
-    ///   update them
-    /// @param block_index The block index of an occurrence
-    /// @param block_offset The offset of that occurrence
-    void update(size_type block_index, size_type block_offset) {
-      FirstOccurrence prev_first_occ = this->first_occ.load();
-      FirstOccurrence set(block_index, block_offset);
-      while (block_index < prev_first_occ.block &&
-             !first_occ.compare_exchange_weak(prev_first_occ, set)) {
-      }
-    }
-  };
-
-  /// @brief An update function for the sharded hash map that updates the
-  ///   occurrences of a hashed block pair
-  struct UpdatePairOccurrences {
-    /// @brief The block index to add to the occurrences
-    using InputValue = size_type;
-    /// @brief Update the occurrences of a hashed block pair by adding the new
-    ///   block index and updating the first occurrence if needed
-    /// @param occurrences A reference to the occurrences in the map
-    /// @param input_value The new block index to add to the occurrences
-    inline static void update(const RabinKarpHash&,
-                              PairOccurrences& occurrences,
-                              InputValue&& input_value) {
-      occurrences.add_block_pair(input_value);
-      occurrences.update(input_value);
-    }
-
-    /// @brief Initialize the occurrences of a hashed block pair
-    /// @param input_value The block index of the pair's first block
-    /// @return The initialized occurrences only containing the given block pair
-    inline static PairOccurrences init(const RabinKarpHash&,
-                                       InputValue&& input_value) {
-      PairOccurrences occurrences(input_value);
-      occurrences.add_block_pair(input_value);
-      occurrences.update(input_value);
-      return occurrences;
-    }
-  };
-
-  /// @brief An update function for the sharded hash map that updates the
-  ///   occurrences of a hashed block
-  struct UpdateBlockOccurrences {
-    /// @brief A pair of the block index
-    ///   and offset of the first occurrence of a block
-    using InputValue = std::pair<size_type, size_type>;
-
-    /// @brief Update the occurrences of a hashed block by adding the new
-    ///   block index and offset and updating the first occurrence if needed
-    /// @param occurrences A reference to the occurrences in the map
-    /// @param input_value The new block index and offset to add to the
-    ///   occurrences
-    inline static void update(const RabinKarpHash&,
-                              BlockOccurrences& occurrences,
-                              InputValue&& input_value) {
-      occurrences.add_block(input_value.first);
-      occurrences.update(input_value.first, input_value.second);
-    }
-
-    /// @brief Initialize the occurrences of a hashed block.
-    /// @param input_value A pair of the block index and offset of one of the
-    ///   block's occurrences
-    /// @return The initialized occurrences only containing the given block
-    inline static BlockOccurrences init(const RabinKarpHash&,
-                                        InputValue&& input_value) {
-      BlockOccurrences occurrences(input_value.first);
-      occurrences.add_block(input_value.first);
-      occurrences.update(input_value.first, input_value.second);
-      return occurrences;
-    }
-  };
-
-  /// @brief A map containing hashed block pairs mapped to their occurrences
-  using BlockPairMap = RabinKarpMap<PairOccurrences, UpdatePairOccurrences>;
-  /// @brief A map containing hashed blocks mapped to their occurrences
-  using BlockMap = RabinKarpMap<BlockOccurrences, UpdateBlockOccurrences>;
 
   /// @brief Constructs the block tree.
   /// @param text The input text.
@@ -665,7 +453,7 @@ private:
           const uint64_t hash_value =
               pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
           RabinKarpHash hash(text,
-                             mix_select(hash_value),
+                             internal::sharded::mix_select(hash_value),
                              block_start,
                              block_size);
           // Try to find the hash in the map, insert a new entry if it
@@ -889,7 +677,7 @@ private:
       const uint64_t hash_value =
           pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
       RabinKarpHash current_hash(text,
-                                 mix_select(hash_value),
+                                 internal::sharded::mix_select(hash_value),
                                  block_start + offset,
                                  pair_size);
       // Find the hash of the current window among the hashed block
@@ -930,8 +718,9 @@ private:
                    const size_t queue_size) {
     const size_t num_blocks = level_data.num_blocks;
 
-    level_data.pointers =
-        std::make_unique<std::vector<size_type>>(num_blocks, NO_EARLIER_OCC);
+    level_data.pointers = std::make_unique<std::vector<size_type>>(
+        num_blocks,
+        internal::sharded::NO_EARLIER_OCC);
     level_data.offsets =
         std::make_unique<std::vector<size_type>>(num_blocks, 0);
     level_data.counters =
@@ -1007,7 +796,7 @@ private:
           const uint64_t hash_value =
               pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
           RabinKarpHash hash(text,
-                             mix_select(hash_value),
+                             internal::sharded::mix_select(hash_value),
                              block_start,
                              block_size);
 
@@ -1203,7 +992,7 @@ private:
       const uint64_t hash_value =
           pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
       RabinKarpHash hash(text,
-                         mix_select(hash_value),
+                         internal::sharded::mix_select(hash_value),
                          block_start + offset,
                          level_data.block_size);
       // Find all blocks in the multimap that match our hash
@@ -1458,7 +1247,7 @@ private:
       prefix_pruned_blocks[i] = num_pruned;
 
       // If the current block is not pruned, add it to the new tree
-      if (ptr == PRUNED) {
+      if (ptr == internal::sharded::PRUNED) {
         num_pruned++;
         continue;
       }
@@ -1561,7 +1350,7 @@ private:
     const size_type counter = (*level.counters)[block_index];
     // If there is no earlier occurrence or there are blocks pointing
     // to this, then this must stay internal
-    if (pointer == NO_EARLIER_OCC || counter > 0) {
+    if (pointer == internal::sharded::NO_EARLIER_OCC || counter > 0) {
       return true;
     }
 
@@ -1589,17 +1378,19 @@ private:
         std::cout << "non-internal node missing pointer" << std::endl;
         std::cout << level_index << ", " << block_index << " / "
                   << child_level.is_internal->size() << std::endl;
-      } else if (child_pointer == PRUNED && child_pointer < 0) {
+      } else if (child_pointer == internal::sharded::PRUNED &&
+                 child_pointer < 0) {
         std::cout << "pruned node missing pointer" << std::endl;
       }
-      BT_ASSERT(!(*child_level.is_internal)[child] || child_pointer == PRUNED);
+      BT_ASSERT(!(*child_level.is_internal)[child] ||
+                child_pointer == internal::sharded::PRUNED);
       BT_ASSERT(child_pointer >= 0);
 #endif
       // Decrement the counter of where the child points
       (*child_level.counters)[child_pointer] -= 1;
       (*child_level.counters)[child_pointer + 1] -= child_offset > 0;
       // Mark the child as pruned
-      (*child_level.pointers)[child] = PRUNED;
+      (*child_level.pointers)[child] = internal::sharded::PRUNED;
     }
 
     return false;

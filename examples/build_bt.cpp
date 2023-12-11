@@ -28,7 +28,7 @@
 
 constexpr size_t RECURSION_LEVELS = 1;
 
-#define REC_PAR_SHARDED
+#define PAR_SHARDED_SYNC_SMALL
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -110,7 +110,7 @@ make_bt(std::vector<uint8_t>& text,
 }
 #  define ALGO_NAME "shard_sync"
 #elif defined PAR_SHARDED_SYNC_SMALL
-#  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
+#  include <pasta/block_tree/construction/block_tree_sharded.hpp>
 std::unique_ptr<pasta::BlockTreeSharded<uint8_t, int32_t>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
