@@ -362,10 +362,18 @@ public:
                  handle_queue_ns,                                              \
                  scan_hits,                                                    \
                  threads,                                                      \
-                 std::cout)
+                 std::cout,                                                    \
+                 internal::sharded::HASH_MASKS)
 #else
 #  pragma omp parallel default(none) num_threads(threads)                      \
-      shared(level, map, text, is_padded, threads_done, last_done, barrier)
+      shared(level,                                                            \
+                 map,                                                          \
+                 text,                                                         \
+                 is_padded,                                                    \
+                 threads_done,                                                 \
+                 last_done,                                                    \
+                 barrier,                                                      \
+                 internal::sharded::HASH_MASKS)
 #endif
     {
       const size_t thread_id = omp_get_thread_num();
@@ -723,10 +731,18 @@ public:
                  finish_idle_ns,                                               \
                  total_idle_ns,                                                \
                  handle_queue_ns,                                              \
-                 scan_hits)
+                 scan_hits,                                                    \
+                 internal::sharded::HASH_MASKS)
 #else
 #  pragma omp parallel default(none) num_threads(threads)                      \
-      shared(level_data, text, links, is_padded, num_done, last_done, barrier)
+      shared(level_data,                                                       \
+                 text,                                                         \
+                 links,                                                        \
+                 is_padded,                                                    \
+                 num_done,                                                     \
+                 last_done,                                                    \
+                 barrier,                                                      \
+                 internal::sharded::HASH_MASKS)
 #endif
     {
       const size_t num_threads = omp_get_num_threads();

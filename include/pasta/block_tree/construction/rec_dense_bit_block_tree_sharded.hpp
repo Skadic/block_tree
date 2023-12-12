@@ -1139,13 +1139,12 @@ public:
     this->leaf_bits_ = std::make_unique<BitVector>(
         final_num_internals * this->leaf_size * this->tau_,
         false);
-    std::cout << "leaf bit size: " << this->leaf_bits_->size() << std::endl;
     for (size_t block = 0; block < last_is_internal.size(); block++) {
       if (!last_is_internal[block]) {
         continue;
       }
       const size_type block_start = last_block_starts[block];
-      // For every leaf on the last level, we have tau leaf blocks
+      // For every leaf on the las#elift level, we have tau leaf blocks
       leaf_count += this->tau_;
       // Iterate through all characters in this child and
       // add them to the leaf string
@@ -1159,7 +1158,6 @@ public:
         }
       }
     }
-    std::cout << "leaf count: " << leaf_count << std::endl;
     if constexpr (recursion_level == 0) {
       if (levels.size() == 1) {
         top_level.is_internal.release();

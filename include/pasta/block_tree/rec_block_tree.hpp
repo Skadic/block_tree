@@ -390,25 +390,53 @@ public:
   int64_t print_space_usage() {
     int64_t space_usage = sizeof(tau_) + sizeof(max_leaf_length_) + sizeof(s_) +
                           sizeof(leaf_size);
+    auto delta_size = 0;
     if constexpr (recursion_level > 0) {
       for (auto bt : block_tree_types_) {
         space_usage += bt->print_space_usage();
+        delta_size += bt->print_space_usage();
       }
+#ifdef BT_DBG
+      std::cout << "bv size: " << delta_size << std::endl;
+      delta_size = 0;
+#endif
     }
     if constexpr (recursion_level == 0) {
       for (auto bv : block_tree_types_) {
         space_usage += bv->size() / 8;
+        delta_size += bv->size() / 8;
       }
+#ifdef BT_DBG
+      std::cout << "bv size: " << delta_size << std::endl;
+      delta_size = 0;
+#endif
       for (auto rs : block_tree_types_rs_) {
         space_usage += rs->space_usage();
+        delta_size += rs->space_usage();
       }
+#ifdef BT_DBG
+      std::cout << "rs size: " << delta_size << std::endl;
+      delta_size = 0;
+#endif
     }
     for (const auto iv : block_tree_pointers_) {
       space_usage += (int64_t)sdsl::size_in_bytes(*iv);
+      delta_size += (int64_t)sdsl::size_in_bytes(*iv);
     }
+#ifdef BT_DBG
+    std::cout << "ptrs size: " << delta_size << std::endl;
+    delta_size = 0;
+#endif
+
     for (const auto iv : block_tree_offsets_) {
       space_usage += (int64_t)sdsl::size_in_bytes(*iv);
+      delta_size += (int64_t)sdsl::size_in_bytes(*iv);
     }
+#ifdef BT_DBG
+    std::cout << "offs size: " << delta_size << std::endl;
+    delta_size = 0;
+#endif
+
     if (rank_support) {
       for (auto c : chars_) {
         int64_t sum = 0;
@@ -431,6 +459,11 @@ public:
     // space_usage += leaves_.size() * sizeof(input_type);
     space_usage += sdsl::size_in_bytes(compressed_leaves_);
     space_usage += compress_map_.size();
+#ifdef BT_DBG
+    std::cout << "leaves size: " << sdsl::size_in_bytes(compressed_leaves_)
+              << std::endl;
+    delta_size = 0;
+#endif
 
     return space_usage;
   };

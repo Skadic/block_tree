@@ -1391,7 +1391,8 @@ public:
         std::cout << "non-internal node missing pointer" << std::endl;
         std::cout << level_index << ", " << block_index << " / "
                   << child_level.is_internal->size() << std::endl;
-      } else if (child_pointer == PRUNED && child_pointer < 0) {
+      } else if (child_pointer == internal::sharded::PRUNED &&
+                 child_pointer < 0) {
         std::cout << "pruned node missing pointer" << std::endl;
       }
       BT_ASSERT(!(*child_level.is_internal)[child] || child_pointer == PRUNED);

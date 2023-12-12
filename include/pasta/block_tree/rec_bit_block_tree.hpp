@@ -524,14 +524,18 @@ public:
         delta_size += bt->size() / 8;
       }
     }
+#ifdef BT_DBG
     std::cout << "bv size: " << delta_size << std::endl;
     delta_size = 0;
+#endif
     if constexpr (recursion_level == 0) {
       for (const auto* rs : block_tree_types_rs_) {
         space_usage += rs->space_usage();
         delta_size += rs->space_usage();
       }
+#ifdef BT_DBG
       std::cout << "rs size: " << delta_size << std::endl;
+#endif
     }
     delta_size = 0;
     for (const auto iv : block_tree_pointers_) {
@@ -539,12 +543,17 @@ public:
       delta_size += (int64_t)sdsl::size_in_bytes(*iv);
       ;
     }
+#ifdef BT_DBG
     std::cout << "ptrs size: " << delta_size << std::endl;
     delta_size = 0;
+#endif
     for (const auto iv : block_tree_offsets_) {
       space_usage += sdsl::size_in_bytes(*iv);
+      delta_size += (int64_t)sdsl::size_in_bytes(*iv);
     }
+#ifdef BT_DBG
     std::cout << "offs size: " << delta_size << std::endl;
+#endif
     space_usage += block_size_lvl_.size() *
                    sizeof(typename decltype(block_size_lvl_)::value_type);
     space_usage += block_per_lvl_.size() *

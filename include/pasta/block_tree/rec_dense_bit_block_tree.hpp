@@ -27,7 +27,6 @@
 #include <pasta/bit_vector/support/optimized_for.hpp>
 #include <pasta/bit_vector/support/rank_select.hpp>
 #include <sdsl/int_vector.hpp>
-#include <syncstream>
 #include <thread>
 #include <vector>
 
@@ -152,7 +151,7 @@ private:
   [[nodiscard]] size_t find_initial_block(const size_t rank) const {
     const auto& top_one_ranks = one_ranks_[0];
     const size_t block_size = block_size_lvl_[0];
-    size_t start = (rank - 1) / (block_size * 8);
+    size_t start = (rank - 1) / block_size;
     size_t end = top_one_ranks.size() - 1;
     while (start != end) {
       const size_t middle = start + (end - start) / 2;
@@ -160,7 +159,7 @@ private:
       if constexpr (one) {
         current_rank = (middle == 0) ? 0 : top_one_ranks[middle - 1];
       } else {
-        const size_t middle_bits = middle * block_size * 8;
+        const size_t middle_bits = middle * block_size;
         current_rank =
             (middle == 0) ? 0 : middle_bits - top_one_ranks[middle - 1];
       }
@@ -170,7 +169,7 @@ private:
           if constexpr (one) {
             bits = top_one_ranks[middle];
           } else {
-            bits = (middle + 1) * block_size * 8 - top_one_ranks[middle];
+            bits = (middle + 1) * block_size - top_one_ranks[middle];
           }
           // If there is only one block left, it's either the current or the
           // next block
@@ -200,7 +199,7 @@ public:
     // Binary Search for the correct top level block containing the correct 1
     size_t current_block = find_initial_block<true>(rank);
 
-    size_t pos = (current_block * block_size * 8) - 1;
+    size_t pos = current_block * block_size - 1;
     // ReSharper disable once CppDFAUnreachableCode
     rank -= (current_block == 0) ? 0 : top_one_ranks[current_block - 1];
 
@@ -216,11 +215,11 @@ public:
       rank_d -= pointer_prefix_one_counts_[0][back_block_index];
       if (rank > rank_d) {
         rank -= rank_d;
-        pos += (block_size - offset) * 8;
+        pos += block_size - offset;
         ++current_block;
       } else {
         rank += pointer_prefix_one_counts_[0][back_block_index];
-        pos -= offset * 8;
+        pos -= offset;
       }
     }
 
@@ -241,7 +240,7 @@ public:
         ++current_block;
       }
       rank -= (current_block == start_block) ? 0 : one_ranks[current_block - 1];
-      pos += (current_block - start_block) * block_size * 8;
+      pos += (current_block - start_block) * block_size;
       if (!is_internal[current_block]) {
         size_t back_block_index = is_internal_rank.rank0(current_block);
         current_block = pointers[back_block_index];
@@ -253,11 +252,11 @@ public:
         rank_d -= pointer_ranks[back_block_index];
         if (rank > rank_d) {
           rank -= rank_d;
-          pos += (block_size - offset) * 8;
+          pos += (block_size - offset);
           ++current_block;
         } else {
           rank += pointer_ranks[back_block_index];
-          pos -= offset * 8;
+          pos -= offset;
         }
       }
       ++level;
@@ -265,22 +264,8 @@ public:
 
     current_block =
         block_tree_types_rs_[level - 1]->rank1(current_block) * tau_;
-    size_t byte_offset = 0;
-    while (rank > 0) {
-      const uint8_t byte =
-          decompress_map_[compressed_leaves_[current_block * leaf_size +
-                                             byte_offset]];
-      const uint8_t num_ones = std::popcount(byte);
-      if (rank > num_ones) {
-        rank -= num_ones;
-        pos += 8;
-        ++byte_offset;
-      } else {
-        for (uint8_t bit = 0; bit < 8 && rank > 0; ++bit) {
-          pos++;
-          rank -= ((1 << bit) & byte) > 0;
-        }
-      }
+    for (uint8_t bit = 0; rank > 0; ++bit, ++pos) {
+      rank -= (*leaf_bits_)[current_block * leaf_size + bit];
     }
     return pos;
   }
@@ -296,12 +281,12 @@ public:
     const size_t top_block_size = block_size_lvl_[0];
     const auto top_zero_ranks = [&top_one_ranks,
                                  top_block_size](const size_t i) -> size_t {
-      return (i + 1) * top_block_size * 8 - top_one_ranks[i];
+      return (i + 1) * top_block_size - top_one_ranks[i];
     };
 
     // Binary Search for the correct top level block containing the correct 1
     size_t current_block = find_initial_block<false>(rank);
-    const size_t top_block_bits = top_block_size * 8;
+    const size_t top_block_bits = top_block_size;
 
     size_t pos = (current_block * top_block_bits) - 1;
     // ReSharper disable once CppDFAUnreachableCode
@@ -313,7 +298,7 @@ public:
       // height() == 1 ? leaf_size * 8 : block_size_lvl_[1] * 8;
       current_block = top_pointers[back_block_index];
       const size_t offset = top_offsets[back_block_index];
-      const size_t prefix_bits = offset * 8;
+      const size_t prefix_bits = offset;
       size_t rank_d =
           (current_block == 0) ?
               top_zero_ranks(current_block) :
@@ -321,11 +306,11 @@ public:
       rank_d -= prefix_bits - pointer_prefix_one_counts_[0][back_block_index];
       if (rank > rank_d) {
         rank -= rank_d;
-        pos += (top_block_size - offset) * 8;
+        pos += top_block_size - offset;
         ++current_block;
       } else {
         rank += prefix_bits - pointer_prefix_one_counts_[0][back_block_index];
-        pos -= offset * 8;
+        pos -= offset;
       }
     }
 
@@ -345,7 +330,7 @@ public:
 
       const auto zero_ranks =
           [&one_ranks, this, block_size](const size_t i) -> size_t {
-        const size_t rnk = (i % this->tau_ + 1) * block_size * 8 - one_ranks[i];
+        const size_t rnk = (i % this->tau_ + 1) * block_size - one_ranks[i];
         return rnk;
       };
       const size_t start_block = current_block;
@@ -354,12 +339,12 @@ public:
       }
       rank -=
           (current_block == start_block) ? 0 : zero_ranks(current_block - 1);
-      pos += (current_block - start_block) * block_size * 8;
+      pos += (current_block - start_block) * block_size;
       if (!is_internal[current_block]) {
         size_t back_block_index = is_internal_rank.rank0(current_block);
         current_block = pointers[back_block_index];
         const size_t offset = offsets[back_block_index];
-        const size_t prefix_bits = offset * 8;
+        const size_t prefix_bits = offset;
         size_t rank_d =
             (current_block % tau_ == 0) ?
                 zero_ranks(current_block) :
@@ -367,23 +352,20 @@ public:
         rank_d -= prefix_bits - pointer_ranks[back_block_index];
         if (rank > rank_d) {
           rank -= rank_d;
-          pos += (block_size - offset) * 8;
+          pos += block_size - offset;
           ++current_block;
         } else {
           rank += prefix_bits - pointer_ranks[back_block_index];
-          pos -= offset * 8;
+          pos -= offset;
         }
       }
       ++level;
     }
 
-    if (omp_get_thread_num() == 1) {
-      std::osyncstream(std::cout) << *leaf_bits_ << std::endl;
-    }
     current_block =
         block_tree_types_rs_[level - 1]->rank1(current_block) * tau_;
     for (uint8_t bit = 0; rank > 0; ++bit, ++pos) {
-      rank -= (*leaf_bits_)[current_block * leaf_size + bit];
+      rank -= !(*leaf_bits_)[current_block * leaf_size + bit];
     }
     return pos;
   }
@@ -491,14 +473,18 @@ public:
         delta_size += bt->size() / 8;
       }
     }
+#ifdef BT_DBG
     std::cout << "bv size: " << delta_size << std::endl;
     delta_size = 0;
+#endif
     if constexpr (recursion_level == 0) {
       for (const auto* rs : block_tree_types_rs_) {
         space_usage += rs->space_usage();
         delta_size += rs->space_usage();
       }
+#ifdef BT_DBG
       std::cout << "rs size: " << delta_size << std::endl;
+#endif
     }
     delta_size = 0;
     for (const auto iv : block_tree_pointers_) {
@@ -506,12 +492,17 @@ public:
       delta_size += (int64_t)sdsl::size_in_bytes(*iv);
       ;
     }
+#ifdef BT_DBG
     std::cout << "ptrs size: " << delta_size << std::endl;
     delta_size = 0;
+#endif
     for (const auto iv : block_tree_offsets_) {
       space_usage += sdsl::size_in_bytes(*iv);
+      delta_size += (int64_t)sdsl::size_in_bytes(*iv);
     }
+#ifdef BT_DBG
     std::cout << "offs size: " << delta_size << std::endl;
+#endif
     space_usage += block_size_lvl_.size() *
                    sizeof(typename decltype(block_size_lvl_)::value_type);
     space_usage += block_per_lvl_.size() *
@@ -527,6 +518,9 @@ public:
     }
 
     space_usage += leaf_bits_->size() / 8;
+#ifdef BT_DBG
+    std::cout << "leaf string: " << leaf_bits_->size() / 8 << std::endl;
+#endif
 
     return space_usage;
   };

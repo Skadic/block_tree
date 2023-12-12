@@ -22,13 +22,18 @@
 #include <fstream>
 #include <iostream>
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
-#include <pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp>
 #include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
+#include <pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp>
 #include <syncstream>
 
-constexpr size_t RECURSION_LEVELS = 1;
+#define REC_PAR_SHARDED
 
-#define PAR_SHARDED_SYNC_SMALL
+#if defined REC_BIT || defined REC_PAR_SHARDED
+constexpr size_t RECURSION_LEVELS = 1;
+#else
+constexpr size_t RECURSION_LEVELS = 0;
+#endif
+
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
 std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
@@ -110,20 +115,20 @@ make_bt(std::vector<uint8_t>& text,
 }
 #  define ALGO_NAME "shard_sync"
 #elif defined PAR_SHARDED_SYNC_SMALL
-#  include <pasta/block_tree/construction/block_tree_sharded.hpp>
-std::unique_ptr<pasta::BlockTreeSharded<uint8_t, int32_t>>
+#  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
+std::unique_ptr<pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, 0>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
-  return std::make_unique<pasta::BlockTreeSharded<uint8_t, int32_t>>(
-      text,
-      arity,
-      1,
-      leaf_length,
-      threads,
-      queue_size);
+  return std::make_unique<
+      pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, 0>>(text,
+                                                             arity,
+                                                             1,
+                                                             leaf_length,
+                                                             threads,
+                                                             queue_size);
 }
 #  define ALGO_NAME "shard_sync_small"
 #elif defined REC_PAR_SHARDED
@@ -164,13 +169,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "par_map"
 #elif defined REC_BIT
 #  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
-std::unique_ptr<pasta::RecursiveBitBlockTreeSharded<int32_t, 4>>
+std::unique_ptr<pasta::RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
-  return std::make_unique<pasta::RecursiveBitBlockTreeSharded<int32_t, 4>>(
+  return std::make_unique<
+      pasta::RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>(
       text,
       arity,
       1,
@@ -206,7 +212,7 @@ using Clock = std::chrono::high_resolution_clock;
 using TimePoint = Clock::time_point;
 using Duration = Clock::duration;
 
-using A = pasta::RecursiveDenseBitBlockTreeSharded<int32_t, 0>;
+using BBT = pasta::RecursiveDenseBitBlockTreeSharded<int32_t, RECURSION_LEVELS>;
 
 int main(int argc, char** argv) {
   using namespace pasta;
@@ -273,8 +279,7 @@ int main(int argc, char** argv) {
 #ifdef BT_DBG
   std::cout << "building block tree with parameters:"
             << "\narity: " << arity << "\nmax leaf length: " << leaf_length
-            << "\nsaving to " << out_path << "\nusing " << threads << " threads"
-            << std::endl;
+            << "\nusing " << threads << " threads" << std::endl;
 #endif
 
   if (!std::filesystem::exists(file)) {
@@ -319,9 +324,9 @@ int main(int argc, char** argv) {
             << " threads=" << threads << " arity=" << arity
             << " leaf_length=" << leaf_length;
   if (make_bv) {
-    std::cout << " bv_size=" << bv->size();
+    std::cout << " input_size=" << bv->size() / 8;
   } else {
-    std::cout << " file_size=" << text.size();
+    std::cout << " input_size=" << text.size();
   }
   TimePoint now = Clock::now();
 
@@ -338,7 +343,7 @@ int main(int argc, char** argv) {
                                                                      queue_size);
     */
     auto bt =
-        std::make_unique<A>(*bv, arity, 1, leaf_length, threads, queue_size);
+        std::make_unique<BBT>(*bv, arity, 1, leaf_length, threads, queue_size);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();
@@ -386,19 +391,6 @@ int main(int argc, char** argv) {
       }
     }
     const size_t num_zeros = frs.rank0(bv->size());
-
-#pragma omp parallel for
-    for (size_t i = 1; i <= num_zeros; i++) {
-      const size_t bv_rank = frs.select0(i);
-      const size_t bt_rank = bt->select0(i);
-      if (bv_rank != bt_rank) {
-        std::osyncstream(std::cerr) << "Select zero error at position " << i
-                                    << "\nExpected: " << bv_rank
-                                    << "\nActual: " << bt_rank << std::endl;
-        throw std::runtime_error("oof");
-      }
-    }
-
     const size_t num_ones = frs.rank1(bv->size());
 
 #pragma omp parallel for
@@ -409,6 +401,18 @@ int main(int argc, char** argv) {
         std::osyncstream(std::cerr)
             << "Select one error at position " << i << "\nExpected: " << bv_rank
             << "\nActual: " << bt_rank << std::endl;
+        throw std::runtime_error("oof");
+      }
+    }
+
+#pragma omp parallel for
+    for (size_t i = 1; i <= num_zeros; i++) {
+      const size_t bv_rank = frs.select0(i);
+      const size_t bt_rank = bt->select0(i);
+      if (bv_rank != bt_rank) {
+        std::osyncstream(std::cerr) << "Select zero error at position " << i
+                                    << "\nExpected: " << bv_rank
+                                    << "\nActual: " << bt_rank << std::endl;
         throw std::runtime_error("oof");
       }
     }
