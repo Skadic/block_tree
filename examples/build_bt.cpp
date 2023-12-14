@@ -22,16 +22,25 @@
 #include <fstream>
 #include <iostream>
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
-#include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
-#include <pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp>
 #include <syncstream>
 
-#define REC_PAR_SHARDED
+#define PAR_PHMAP
+#define REC_BIT
 
-#if defined REC_BIT || defined REC_PAR_SHARDED
-constexpr size_t RECURSION_LEVELS = 1;
+#if defined REC_BIT || defined REC_DENSE_BIT || defined REC_PAR_SHARDED
+constexpr size_t RECURSION_LEVELS = 0;
 #else
 constexpr size_t RECURSION_LEVELS = 0;
+#endif
+
+#if defined REC_DENSE_BIT
+#  include <pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp>
+using BBT = pasta::RecursiveDenseBitBlockTreeSharded<int32_t, RECURSION_LEVELS>;
+#  define BIT_ALGO_NAME "rec_dense_bit"
+#elif defined REC_BIT
+#  include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
+using BBT = pasta::RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>;
+#  define BIT_ALGO_NAME "rec_bit"
 #endif
 
 #ifdef FP
@@ -167,24 +176,6 @@ make_bt(std::vector<uint8_t>& text,
       threads);
 }
 #  define ALGO_NAME "par_map"
-#elif defined REC_BIT
-#  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
-std::unique_ptr<pasta::RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>
-make_bt(std::vector<uint8_t>& text,
-        const size_t arity,
-        const size_t leaf_length,
-        const size_t threads,
-        const size_t queue_size) {
-  return std::make_unique<
-      pasta::RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>(
-      text,
-      arity,
-      1,
-      leaf_length,
-      threads,
-      queue_size);
-}
-#  define ALGO_NAME "rec_bit_shard"
 #elif defined PAR_PARLAY
 #  include <pasta/block_tree/construction/block_tree_fp_par_parlay.hpp>
 std::unique_ptr<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>
@@ -211,8 +202,6 @@ make_bt(std::vector<uint8_t>& text,
 using Clock = std::chrono::high_resolution_clock;
 using TimePoint = Clock::time_point;
 using Duration = Clock::duration;
-
-using BBT = pasta::RecursiveDenseBitBlockTreeSharded<int32_t, RECURSION_LEVELS>;
 
 int main(int argc, char** argv) {
   using namespace pasta;
@@ -319,7 +308,7 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::cout << "RESULT algo=" << ALGO_NAME
+  std::cout << "RESULT"
             << " file=" << std::filesystem::path(file).filename().string()
             << " threads=" << threads << " arity=" << arity
             << " leaf_length=" << leaf_length;
@@ -331,6 +320,7 @@ int main(int argc, char** argv) {
   TimePoint now = Clock::now();
 
   if (make_bv) {
+    std::cout << " algo=" << BIT_ALGO_NAME;
     // Make bit vector block tree
 
     /*
@@ -418,6 +408,7 @@ int main(int argc, char** argv) {
     }
 
   } else {
+    std::cout << " algo=" << ALGO_NAME;
     // Make text block tree
     auto bt = make_bt(text, arity, leaf_length, threads, queue_size);
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

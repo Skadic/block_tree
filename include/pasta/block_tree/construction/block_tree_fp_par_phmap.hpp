@@ -20,19 +20,15 @@
 
 #pragma once
 
-#include "data-structures/hash_table_mods.hpp"
 #include "pasta/bit_vector/bit_vector.hpp"
 #include "pasta/block_tree/block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
+#include "pasta/block_tree/utils/sharded_util.hpp"
 
-#include <atomic>
-#include <concepts>
-#include <list>
+#include <ankerl/unordered_dense.h>
 #include <memory>
 #include <omp.h>
-#include <phmap.h>
-#include <robin_hood.h>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 
@@ -46,13 +42,6 @@ namespace pasta {
 
 template <std::integral input_type, std::signed_integral size_type>
 class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
-  constexpr static size_type NO_EARLIER_OCC = -1;
-  constexpr static size_type PRUNED = -2;
-
-  static constexpr size_type SIGMA = 256;
-  static constexpr uint128_t K_PRIME = 2305843009213693951ULL;
-  static constexpr uint8_t MERSENNE_EXPONENT = 61;
-
   using BitVector = pasta::BitVector;
   using Rank = pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>;
 
@@ -75,20 +64,23 @@ class BlockTreeFPParPH : public BlockTree<input_type, size_type> {
   template <typename key_type,
             typename value_type,
             typename hash_type = std::hash<key_type>>
-  using HashMap =
-      robin_hood::unordered_node_map<key_type, value_type, hash_type>;
+  using HashMap = ankerl::unordered_dense::map<key_type, value_type, hash_type>;
 
   /// A rabin karp hasher preconfigured for the current template parameters
-  using RabinKarp = MersenneRabinKarp<input_type, size_type, MERSENNE_EXPONENT>;
+  using RabinKarp = MersenneRabinKarp<input_type,
+                                      size_type,
+                                      internal::sharded::PRIME_EXPONENT>;
   /// A rabin karp hash for the preconfigured rabin karp hasher
   using RabinKarpHash = MersenneHash<input_type>;
 
   /// A hash map with rabin karp hashes as keys
-  template <typename value_type,
-            size_t num_submaps = 4,
-            typename mutex_type = phmap::NullMutex>
+  template <typename value_type>
   using RabinKarpMap =
       HashMap<RabinKarpHash, value_type, std::hash<RabinKarpHash>>;
+
+  using LevelData = internal::sharded::LevelData<size_type, Rank>;
+  using PairOccurrences = internal::sharded::PairOccurrences<size_type>;
+  using BlockOccurrences = internal::sharded::BlockOccurrences<size_type>;
 
 #ifdef BT_DBG
 public:
@@ -103,55 +95,6 @@ public:
 
 private:
 #endif
-  /// @brief Contains data about a block tree level under construction
-  struct LevelData {
-    /// Contains a 1 for each internal block (= block with children)
-    /// and a 0 for each block that has a back pointer
-    std::unique_ptr<BitVector> is_internal;
-    /// Rank data structure for is_internal
-    std::unique_ptr<Rank> is_internal_rank;
-    /// The block from which a back block is copying
-    std::unique_ptr<std::vector<size_type>> pointers;
-    /// The offset into the block from which the back block is copying
-    std::unique_ptr<std::vector<size_type>> offsets;
-    /// The number of back blocks pointing to the block
-    std::unique_ptr<std::vector<size_type>> counters;
-    /// Block start indices
-    std::unique_ptr<std::vector<size_type>> block_starts;
-    /// The block size on this level
-    size_type block_size;
-    /// The index of the current level. First level is 0, second level is 1 etc.
-    size_type level_index;
-    /// The number of blocks on the current level
-    size_type num_blocks;
-
-    inline LevelData(size_type level_index_,
-                     size_type block_size_,
-                     size_type num_blocks_)
-        : is_internal(nullptr),
-          is_internal_rank(nullptr),
-          pointers(new std::vector<size_type>()),
-          offsets(new std::vector<size_type>()),
-          counters(new std::vector<size_type>()),
-          block_starts(new std::vector<size_type>()),
-          block_size(block_size_),
-          level_index(level_index_),
-          num_blocks(num_blocks_) {}
-
-    /// @brief Checks whether a block is adjacent in the text
-    ///   to its successor on this level
-    [[nodiscard]] inline bool next_is_adjacent(size_t i) const {
-      return (*block_starts)[i] + static_cast<size_type>(block_size) ==
-             (*block_starts)[i + 1];
-    }
-
-    /// @brief Checks whether a block is adjacent in the text
-    ///   to its predecessor on this level
-    [[nodiscard]] inline bool prev_is_adjacent(size_t i) const {
-      return (*block_starts)[i - 1] + static_cast<size_type>(block_size) ==
-             (*block_starts)[i];
-    }
-  };
 
   void construct(const std::vector<input_type>& text, const size_t threads) {
     const size_type text_len = text.size();
@@ -172,7 +115,8 @@ private:
     // Prepare the top level
     levels.emplace_back(0, top_block_size, text_len / top_block_size);
     LevelData& top_level = levels.back();
-    top_level.block_starts->reserve(ceil_div(text_len, top_level.block_size));
+    top_level.block_starts->reserve(
+        internal::sharded::ceil_div(text_len, top_level.block_size));
     for (size_type i = 0; i < text_len; i += top_level.block_size) {
       top_level.block_starts->push_back(i);
     }
@@ -187,14 +131,15 @@ private:
 
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
-      // std::cout << "level " << level << std::endl;
-
 #ifdef BT_DBG
+      std::cout << "level " << level << std::endl;
+
       TimePoint now = Clock::now();
 #endif
       LevelData& current = levels.back();
       scan_block_pairs(text, current, is_padded, threads);
 #ifdef BT_DBG
+      std::cout << "scanned block pairs " << std::endl;
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
@@ -202,6 +147,7 @@ private:
 #endif
       scan_blocks(text, current, is_padded, threads);
 #ifdef BT_DBG
+      std::cout << "scanned blocks " << std::endl;
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
                        .count();
@@ -209,14 +155,17 @@ private:
 
 #endif
       // Generate the next level (if we're not at the last level)
-      if (level < static_cast<size_t>(tree_height) - 1) {
+      if (level < static_cast<size_t>(tree_height) - 1 &&
+          levels.back().block_size > this->max_leaf_length_ * this->tau_) {
         levels.push_back(std::move(generate_next_level(text, current)));
-      }
 #ifdef BT_DBG
-      generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         Clock::now() - now)
-                         .count();
+        generate_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           Clock::now() - now)
+                           .count();
 #endif
+      } else {
+        break;
+      }
     }
 #ifdef BT_DBG
     TimePoint now = Clock::now();
@@ -250,40 +199,6 @@ private:
     std::cout << "make: " << (make_ns / 1'000'000) << "ms" << std::endl;
 #endif
   }
-
-  /// @brief Returns the ceiling of x / y for x > 0;
-  ///
-  /// https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-  inline static size_t ceil_div(std::integral auto x, std::integral auto y) {
-    return 1 + ((x - 1) / y);
-  }
-
-  struct PairOccurrences {
-    /// @brief The first block in the text in which the content appears
-    size_type first_occ_block;
-    /// @brief A list of block indices in which the content of the hashed block
-    /// pair appears
-    ///
-    /// We're using an std::list here instead of an std::vector, since the
-    /// reallocation upon insertion lead to issues during parallel access, when
-    /// another thread tries to access the vector during reallocation.
-    std::list<size_type> occurrences;
-
-    inline explicit PairOccurrences(size_type first_occ_block_)
-        : first_occ_block(first_occ_block_),
-          occurrences() {}
-
-    inline void add_block(size_type block_index) {
-      occurrences.push_back(block_index);
-    }
-
-    /// @brief If the given block index and offset are an earlier occurrence,
-    /// update them
-    /// @param block_index The block index of an occurrence
-    inline void update(size_type block_index) {
-      first_occ_block = std::min<size_type>(first_occ_block, block_index);
-    }
-  };
 
   /// @brief Scan through the blocks pairwise in order to identify which blocks
   /// should
@@ -322,24 +237,31 @@ private:
       const size_t num_block_pairs = num_blocks - 1 - is_padded;
       const auto& block_starts = *level.block_starts;
 #pragma omp single
-      for (size_t i = 0; i < num_block_pairs; ++i) {
-        // If the next block is not adjacent, we cannot hash the pair starting
-        // at the current block
-        if (!level.next_is_adjacent(i)) {
-          continue;
+      {
+        RabinKarp rk(text,
+                     internal::sharded::SIGMA,
+                     block_starts[0],
+                     pair_size,
+                     internal::sharded::PRIME);
+        for (size_t i = 0; i < num_block_pairs; ++i) {
+          // If the next block is not adjacent, we cannot hash the pair starting
+          // at the current block
+          if (!level.next_is_adjacent(i)) {
+            continue;
+          }
+          rk.restart(block_starts[i]);
+          // Move the hasher to the current block pair
+          RabinKarpHash hash = rk.current_hash();
+          // Try to find the hash in the map, insert a new entry if it doesn't
+          // exist, and add the current block to the entry
+          auto ptr = map.find(hash);
+          if (ptr == map.end()) {
+            auto [insert_ptr, _] = map.insert({hash, PairOccurrences(i)});
+            ptr = insert_ptr;
+          }
+          ptr->second.add_block_pair(i);
+          ptr->second.update(i);
         }
-        // Move the hasher to the current block pair
-        RabinKarp rk(text, SIGMA, block_starts[i], pair_size, K_PRIME);
-        RabinKarpHash hash = rk.current_hash();
-        // Try to find the hash in the map, insert a new entry if it doesn't
-        // exist, and add the current block to the entry
-        auto ptr = map.find(hash);
-        if (ptr == map.end()) {
-          auto [insert_ptr, _] = map.insert({hash, PairOccurrences(i)});
-          ptr = insert_ptr;
-        }
-        ptr->second.add_block(i);
-        ptr->second.update(i);
       }
 #pragma omp barrier
 #ifdef BT_DBG
@@ -355,8 +277,9 @@ private:
 
       // Hash every window and determine for all block pairs whether they have
       // previous occurrences.
-      size_t segment_size =
-          std::max<size_t>(1, ceil_div(num_block_pairs, omp_get_num_threads()));
+      size_t segment_size = std::max<size_t>(
+          1,
+          internal::sharded::ceil_div(num_block_pairs, omp_get_num_threads()));
       const size_t thread_id = omp_get_thread_num();
 
       // Start and end index of the current thread's segment
@@ -365,7 +288,11 @@ private:
           std::min<size_t>(num_block_pairs, (thread_id + 1) * segment_size);
 
       if (start < static_cast<size_t>(num_block_pairs)) {
-        RabinKarp rk(text, SIGMA, block_starts[start], pair_size, K_PRIME);
+        RabinKarp rk(text,
+                     internal::sharded::SIGMA,
+                     block_starts[start],
+                     pair_size,
+                     internal::sharded::PRIME);
         for (size_t i = start; i < end; ++i) {
           if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
             continue;
@@ -395,7 +322,6 @@ private:
           markings[occ + 1] = markings[occ + 1] | 0b01;
         }
       }
-      map.erase(it);
     }
 #ifdef BT_DBG
     bp_markings_ns +=
@@ -449,62 +375,6 @@ private:
     }
   }
 
-  struct BlockOccurrences {
-    struct FirstOccurrence {
-      /// @brief Block index of the first occurrence of the block's content
-      size_type block;
-      /// @brief The offset into the block at which that first occurrence occurs
-      size_type offset;
-
-      inline FirstOccurrence(size_type first_occ_block_,
-                             size_type first_occ_offset_)
-          : block(first_occ_block_),
-            offset(first_occ_offset_) {}
-    };
-
-    // The block index and offset of the first occurrence of this block's
-    // content
-    std::atomic<FirstOccurrence> first_occ;
-
-    /// @brief A list of block indices in which the content of the hashed block
-    /// occurs
-    std::list<size_type> occurrences;
-    std::mutex list_mutex;
-
-    BlockOccurrences(size_type first_occ_block_)
-        : first_occ({first_occ_block_, 0}),
-          occurrences(),
-          list_mutex() {}
-
-    BlockOccurrences(const BlockOccurrences& other)
-        : first_occ(other.first_occ.load()),
-          occurrences(other.occurrences),
-          list_mutex() {}
-
-    BlockOccurrences(BlockOccurrences&& other)
-        : first_occ(other.first_occ.load()),
-          occurrences(std::move(other.occurrences)),
-          list_mutex() {}
-
-    inline void add_block(size_type block_index) {
-      const std::lock_guard lock(list_mutex);
-      occurrences.push_back(block_index);
-    }
-
-    /// @brief If the given block index and offset are an earlier occurrence,
-    /// update them
-    /// @param block_index The block index of an occurrence
-    /// @param block_index The offset of that occurrence
-    inline void update(size_type block_index, size_type block_offset) {
-      FirstOccurrence prev_first_occ = this->first_occ.load();
-      FirstOccurrence set(block_index, block_offset);
-      while (block_index < prev_first_occ.block &&
-             !first_occ.compare_exchange_weak(prev_first_occ, set)) {
-      }
-      //||(first_occ_block == block_index && block_offset < first_occ_offset)) {
-    }
-  };
-
   /// @brief Determine the positions for each block's earliest occurrence if
   /// there is any.
   ///
@@ -518,8 +388,9 @@ private:
                    const size_t threads) {
     const size_t num_blocks = level_data.num_blocks;
 
-    level_data.pointers =
-        std::make_unique<std::vector<size_type>>(num_blocks, NO_EARLIER_OCC);
+    level_data.pointers = std::make_unique<std::vector<size_type>>(
+        num_blocks,
+        internal::sharded::NO_EARLIER_OCC);
     level_data.offsets =
         std::make_unique<std::vector<size_type>>(num_blocks, 0);
     level_data.counters =
@@ -548,10 +419,10 @@ private:
 #pragma omp single
       for (size_type i = 0; i < level_data.num_blocks - is_padded; ++i) {
         const RabinKarp rk(text,
-                           SIGMA,
+                           internal::sharded::SIGMA,
                            block_starts[i],
                            level_data.block_size,
-                           K_PRIME);
+                           internal::sharded::PRIME);
         const RabinKarpHash hash = rk.current_hash();
         auto ptr = links.find(hash);
         if (ptr == links.end()) {
@@ -579,7 +450,8 @@ private:
 
       const size_t thread_id = omp_get_thread_num();
       const size_t segment_size =
-          ceil_div(num_total_iterations, omp_get_num_threads());
+          internal::sharded::ceil_div(num_total_iterations,
+                                      omp_get_num_threads());
       const size_t start = thread_id * segment_size;
       const size_t end = std::min<size_t>(num_total_iterations,
                                           (thread_id + 1) * segment_size);
@@ -587,10 +459,10 @@ private:
       // Hash every window and find the first occurrences for every block.
       if (start < block_starts.size() - is_padded) {
         RabinKarp rk(text,
-                     SIGMA,
+                     internal::sharded::SIGMA,
                      block_starts[start],
                      level_data.block_size,
-                     K_PRIME);
+                     internal::sharded::PRIME);
         for (size_t i = start; i < end; ++i) {
           if (!level_data.next_is_adjacent(i)) {
             continue;
@@ -837,7 +709,9 @@ private:
       const size_type last_block_parent_start =
           previous_level.block_starts->back();
       const size_type block_size = level.block_size;
-      new_size += ceil_div(text_len - last_block_parent_start, block_size);
+      new_size +=
+          internal::sharded::ceil_div(text_len - last_block_parent_start,
+                                      block_size);
     }
     previous_level.block_starts.reset();
     const size_type num_internal = new_num_internal[level_index];
@@ -865,7 +739,7 @@ private:
       prefix_pruned_blocks[i] = num_pruned;
 
       // If the current block is not pruned, add it to the new tree
-      if (ptr == PRUNED) {
+      if (ptr == internal::sharded::PRUNED) {
         num_pruned++;
         continue;
       }
@@ -951,7 +825,7 @@ private:
     const size_type counter = (*level.counters)[block_index];
     // If there is no earlier occurrence or there are blocks pointing to this,
     // then this must stay internal
-    if (pointer == NO_EARLIER_OCC || counter > 0) {
+    if (pointer == internal::sharded::NO_EARLIER_OCC || counter > 0) {
       return true;
     }
 
@@ -979,7 +853,7 @@ private:
       (*child_level.counters)[child_pointer] -= 1;
       (*child_level.counters)[child_pointer + 1] -= child_offset > 0;
       // Mark the child as pruned
-      (*child_level.pointers)[child] = PRUNED;
+      (*child_level.pointers)[child] = internal::sharded::PRUNED;
     }
 
     return false;

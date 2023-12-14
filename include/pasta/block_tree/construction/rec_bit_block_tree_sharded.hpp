@@ -140,7 +140,7 @@ public:
     // Prepare the top level
     levels.emplace_back(0, top_block_size, text_len / top_block_size);
     LevelData& top_level = levels.back();
-    top_level.block_starts->reserve(ceil_div(text_len, top_level.block_size));
+    top_level.block_starts->reserve(internal::sharded::ceil_div(text_len, top_level.block_size));
     for (size_type i = 0; i < text_len; i += top_level.block_size) {
       top_level.block_starts->push_back(i);
     }
@@ -286,13 +286,6 @@ public:
 #endif
   }
 
-  /// @brief Returns the ceiling of x / y for x > 0;
-  ///
-  /// https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-  inline static size_t ceil_div(std::integral auto x, std::integral auto y) {
-    return 1 + ((x - 1) / y);
-  }
-
   [[maybe_unused]] static void
   print_aggregate(const char* name,
                   const tlx::Aggregate<size_t>& agg,
@@ -387,7 +380,7 @@ public:
       // Hash every window and determine for all block pairs whether
       // they have previous occurrences.
       const size_t segment_size =
-          std::max<size_t>(1, ceil_div(num_block_pairs, num_threads));
+          std::max<size_t>(1, internal::sharded::ceil_div(num_block_pairs, num_threads));
 
       // Start and end index of the current thread's segment
       const auto start = thread_id * segment_size;
@@ -754,7 +747,7 @@ public:
       // Number of total iterations the for loop should do
       const size_t num_total_iterations = level_data.num_blocks - is_padded - 1;
       // The number of iterations each thread should do
-      const size_t segment_size = ceil_div(num_total_iterations, num_threads);
+      const size_t segment_size = internal::sharded::ceil_div(num_total_iterations, num_threads);
       // The start and end index of the current thread's segment
       const size_t start = thread_id * segment_size;
       const size_t end = std::min<size_t>(num_total_iterations,
@@ -1208,7 +1201,7 @@ public:
       const size_type last_block_parent_start =
           previous_level.block_starts->back();
       const size_type block_size = level.block_size;
-      new_size += ceil_div(text_len - last_block_parent_start, block_size);
+      new_size += internal::sharded::ceil_div(text_len - last_block_parent_start, block_size);
     }
     previous_level.block_starts.reset();
     const size_type num_internal = new_num_internal[level_index];
@@ -1401,7 +1394,7 @@ public:
     this->max_leaf_length_ = max_leaf_length;
     this->num_bits_ = text.size();
     const std::span bytes(reinterpret_cast<const uint8_t*>(text.data().data()),
-                          ceil_div(text.size(), 8ULL));
+                          internal::sharded::ceil_div(text.size(), 8ULL));
     construct(bytes, threads, queue_size);
     omp_set_dynamic(old_dynamic);
     omp_set_num_threads(old);

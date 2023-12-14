@@ -297,8 +297,8 @@ constexpr uint64_t mix_select(uint64_t key) {
 /// @brief Returns the ceiling of x / y for x > 0;
 ///
 /// https://stackoverflow.com/questions/2745074/fast-ceiling-of-an-integer-division-in-c-c
-inline size_t ceil_div(std::integral auto x, std::integral auto y) {
-  return 1 + (x - 1) / y;
+size_t ceil_div(std::integral auto x, std::integral auto y) {
+  return 1 + (static_cast<size_t>(x) - 1) / static_cast<size_t>(y);
 }
 
 } // namespace pasta::internal::sharded
