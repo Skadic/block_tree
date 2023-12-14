@@ -30,42 +30,6 @@
 
 namespace pasta {
 
-///
-/// @brief An update function which on update just overwrites the value.
-///
-/// @tparam K The key type saved in the hash map.
-/// @tparam V The value type saved in the hash map.
-///
-template <typename K, typename V>
-struct Overwrite {
-  using InputValue = V;
-
-  inline static void update(K&, V& value, V&& input_value) {
-    value = input_value;
-  }
-
-  inline static V init(K&, V&& input_value) {
-    return input_value;
-  }
-};
-
-///
-/// @brief An update function which upon update does nothing besides
-/// inserting the value if it doesn't exist.
-///
-/// @tparam K The key type saved in the hash map.
-/// @tparam V The value type saved in the hash map.
-///
-template <typename K, typename V>
-struct Keep {
-  using InputValue = V;
-  inline static void update(K&, V&, V&&) {}
-
-  inline static V init(K&, V&& input_value) {
-    return input_value;
-  }
-};
-
 /// @brief A hash map that must be used by multiple threads, each thread having
 ///     only having write access to a certain segment of the input space.
 /// @tparam K The type of the keys in the hash map.
@@ -169,8 +133,8 @@ public:
       auto res = map_.find(k);
       if (res == map_.end()) {
         // If the value does not exist, insert it
-        V initial = UpdateFn::init(k, std::move(in_value));
         K key = k;
+        V initial = UpdateFn::init(key, std::move(in_value));
         map_.emplace(key, std::move(initial));
       } else {
         // Otherwise, update it.

@@ -11,7 +11,9 @@
 #include <vector>
 
 /// @brief Utilities for the construction algorithms using the sharded hash map
-namespace pasta::internal::sharded {
+namespace pasta {
+
+namespace internal::sharded {
 
 __extension__ typedef unsigned __int128 uint128_t;
 
@@ -285,6 +287,10 @@ struct UpdateBlockOccurrences {
   }
 };
 
+/// @brief A mixing functions to provide better avalanching to intermediate hash
+/// values.
+///
+/// https://zimbry.blogspot.com/2011/09/better-bit-mixing-improving-on.html
 constexpr uint64_t mix_select(uint64_t key) {
   key ^= (key >> 31);
   key *= 0x7fb5d329728ea185;
@@ -301,4 +307,43 @@ size_t ceil_div(std::integral auto x, std::integral auto y) {
   return 1 + (static_cast<size_t>(x) - 1) / static_cast<size_t>(y);
 }
 
-} // namespace pasta::internal::sharded
+} // namespace internal::sharded
+
+///
+/// @brief An update function for sharded maps which on update just overwrites
+/// the value.
+///
+/// @tparam K The key type saved in the hash map.
+/// @tparam V The value type saved in the hash map.
+///
+template <typename K, typename V>
+struct Overwrite {
+  using InputValue = V;
+
+  inline static void update(K&, V& value, V&& input_value) {
+    value = input_value;
+  }
+
+  inline static V init(K&, V&& input_value) {
+    return input_value;
+  }
+};
+
+///
+/// @brief An update function for sharded maps which upon update does nothing
+/// besides inserting the value if it doesn't exist.
+///
+/// @tparam K The key type saved in the hash map.
+/// @tparam V The value type saved in the hash map.
+///
+template <typename K, typename V>
+struct Keep {
+  using InputValue = V;
+  inline static void update(K&, V&, V&&) {}
+
+  inline static V init(K&, V&& input_value) {
+    return input_value;
+  }
+};
+
+} // namespace pasta

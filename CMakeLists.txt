@@ -133,7 +133,8 @@ target_link_libraries(pasta_block_tree INTERFACE
         sdsl
         #jiffy
         jiffy1
-        libzstd_static)
+        #        libzstd_static
+)
 
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/extlib/growt)

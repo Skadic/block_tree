@@ -19,8 +19,10 @@
  ******************************************************************************/
 #pragma once
 
+#include "sharded_util.hpp"
+
+#include <atomic>
 #include <barrier>
-#include <concepts>
 #include <cstddef>
 #include <omp.h>
 #include <pasta/block_tree/utils/concepts.hpp>
@@ -34,41 +36,6 @@ namespace pasta {
 
 enum Whereabouts { NOWHERE, IN_MAP, IN_QUEUE };
 
-///
-/// @brief An update function which on update just overwrites the value.
-///
-/// @tparam K The key type saved in the hash map.
-/// @tparam V The value type saved in the hash map.
-template <typename K, typename V>
-struct [[maybe_unused]] Overwrite {
-  using InputValue [[maybe_unused]] = V;
-
-  inline static void update(const K&, V& value, V&& input_value) {
-    value = input_value;
-  }
-
-  inline static V init(const K&, V&& input_value) {
-    return input_value;
-  }
-};
-
-///
-/// @brief An update function which upon update does nothing besides
-/// inserting the value if it doesn't exist.
-///
-/// @tparam K The key type saved in the hash map.
-/// @tparam V The value type saved in the hash map.
-///
-template <typename K, typename V>
-struct [[maybe_unused]] Keep {
-  using InputValue [[maybe_unused]] = V;
-  inline static void update(const K&, V&, V&&) {}
-
-  inline static V init(const K&, V&& input_value) {
-    return input_value;
-  }
-};
-
 /// @brief A hash map that must be used by multiple threads, each thread having
 ///     only having write access to a certain segment of the input space.
 /// @tparam K The type of the keys in the hash map.
@@ -81,7 +48,7 @@ template <std::copy_constructible K,
           std::move_constructible V,
           template <typename, typename> typename SeqHashMapType =
               std::unordered_map,
-          UpdateFunction<K, V> UpdateFn = Overwrite<K, V>>
+          UpdateFunction<K, V> UpdateFn = pasta::Overwrite<K, V>>
   requires std::movable<typename UpdateFn::InputValue>
 class SyncShardedMap {
   /// The sequential backing hash map type
@@ -127,16 +94,6 @@ class SyncShardedMap {
 #endif
 
   std::barrier<decltype(FN)> barrier_;
-
-  /// https://zimbry.blogspot.com/2011/09/better-bit-mixing-improving-on.html
-  [[nodiscard]] uint64_t mix_select(uint64_t key) const {
-    key ^= (key >> 31);
-    key *= 0x7fb5d329728ea185;
-    key ^= (key >> 27);
-    key *= 0x81dadef4bc2dd44d;
-    key ^= (key >> 33);
-    return key % thread_count_;
-  }
 
 public:
   std::atomic_size_t num_updates_;
@@ -299,7 +256,8 @@ public:
         handle_queue_sync();
       }
       const size_t hash = Hasher{}(pair.first);
-      const size_t target_thread_id = sharded_map_.mix_select(hash);
+      const size_t target_thread_id =
+          internal::sharded::mix_select(hash) % sharded_map_.thread_count_;
 
       // Otherwise enqueue the new value in the target thread
       std::atomic_size_t& target_task_count =
@@ -375,7 +333,8 @@ public:
 
   [[maybe_unused]] Whereabouts where(const K& k) {
     const size_t hash = Hasher{}(k);
-    const size_t target_thread_id = mix_select(hash);
+    const size_t target_thread_id =
+        internal::sharded::mix_select(hash) % thread_count_;
     SeqHashMap& map = map_[target_thread_id];
     typename SeqHashMap::iterator it = map.find(k);
     if (it != map.end()) {
@@ -409,7 +368,8 @@ public:
 
   typename SeqHashMap::iterator find(const K& key) {
     const size_t hash = Hasher{}(key);
-    const size_t target_thread_id = mix_select(hash);
+    const size_t target_thread_id =
+        internal::sharded::mix_select(hash) % thread_count_;
     SeqHashMap& map = map_[target_thread_id];
     typename SeqHashMap::iterator it = map.find(key);
     if (it == map.end()) {
