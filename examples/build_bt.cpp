@@ -24,7 +24,7 @@
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
 #include <syncstream>
 
-#define PAR_SHARDED
+#define PAR_SHARDED_SYNC
 #define REC_BIT
 
 #if defined REC_BIT || defined REC_DENSE_BIT || defined REC_PAR_SHARDED
