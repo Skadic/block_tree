@@ -31,6 +31,7 @@
 #include <ankerl/unordered_dense.h>
 #include <atomic>
 #include <cstdint>
+#include <iostream>
 #include <memory>
 #include <omp.h>
 #include <sdsl/int_vector.hpp>
@@ -1134,17 +1135,34 @@ public:
     auto& last_is_internal = *levels.back().is_internal;
     std::vector<size_type>& last_block_starts = *levels.back().block_starts;
     size_t bit_index = 0;
-    const size_t final_num_internals =
-        levels.back().is_internal_rank->rank1(last_is_internal.size());
+    size_t final_num_internals = 0;
+    // the rank DS is broken so we count manually
+    // levels.back().is_internal_rank->rank1(last_is_internal.size());
+    for (const bool b : last_is_internal) {
+      if (b) {
+        final_num_internals++;
+      }
+    }
+
     this->leaf_bits_ = std::make_unique<BitVector>(
         final_num_internals * this->leaf_size * this->tau_,
         false);
+#ifdef BT_DBG
+    std::cout << "last size: " << last_is_internal.size() << std::endl;
+    std::cout << "tau: " << this->tau_ << "\nleaf_size: " << this->leaf_size
+              << "\nfinal_num_internals: " << final_num_internals
+              << "\nleaf creation size: "
+              << final_num_internals * this->leaf_size * this->tau_
+              << std::endl;
+    size_t padded = 0;
+    size_t non_padded = 0;
+#endif
     for (size_t block = 0; block < last_is_internal.size(); block++) {
       if (!last_is_internal[block]) {
         continue;
       }
       const size_type block_start = last_block_starts[block];
-      // For every leaf on the las#elift level, we have tau leaf blocks
+      // For every leaf on the last level, we have tau leaf blocks
       leaf_count += this->tau_;
       // Iterate through all characters in this child and
       // add them to the leaf string
@@ -1153,11 +1171,21 @@ public:
         if (static_cast<size_t>(block_start + b) < text.size()) {
           (*this->leaf_bits_)[bit_index++] =
               static_cast<bool>(text[block_start + b]);
+#ifdef BT_DBG
+          non_padded++;
+#endif
         } else {
           (*this->leaf_bits_)[bit_index++] = false;
+#ifdef BT_DBG
+          padded++;
+#endif
         }
       }
     }
+#ifdef BT_DBG
+    std::cout << "padded: " << padded << std::endl;
+    std::cout << "non_padded: " << non_padded << std::endl;
+#endif
     if constexpr (recursion_level == 0) {
       if (levels.size() == 1) {
         top_level.is_internal.release();

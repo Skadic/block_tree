@@ -21,7 +21,7 @@
 
 #pragma once
 
-#include <bit>
+#include <cstddef>
 #include <omp.h>
 #include <pasta/bit_vector/bit_vector.hpp>
 #include <pasta/bit_vector/support/optimized_for.hpp>
@@ -70,12 +70,8 @@ public:
   std::vector<sdsl::int_vector<>*> block_tree_offsets_;
   //    std::vector<sdsl::int_vector<>*> block_tree_encoded_;
   std::vector<int64_t> block_size_lvl_;
-  std::vector<int64_t> block_per_lvl_;
   std::vector<uint8_t> leaves_;
 
-  std::vector<uint8_t> compress_map_;
-  std::vector<uint8_t> decompress_map_;
-  sdsl::int_vector<> compressed_leaves_;
   std::unique_ptr<pasta::BitVector> leaf_bits_;
 
   /// @brief For each level and each block, contains the number of 1s up to (and
@@ -505,8 +501,6 @@ public:
 #endif
     space_usage += block_size_lvl_.size() *
                    sizeof(typename decltype(block_size_lvl_)::value_type);
-    space_usage += block_per_lvl_.size() *
-                   sizeof(typename decltype(block_per_lvl_)::value_type);
 
     if (rank_support) {
       for (auto& rs : one_ranks_) {

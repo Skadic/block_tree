@@ -25,7 +25,7 @@
 #include <syncstream>
 
 #define PAR_SHARDED_SYNC
-#define REC_BIT
+#define REC_DENSE_BIT
 
 #if defined REC_BIT || defined REC_DENSE_BIT || defined REC_PAR_SHARDED
 constexpr size_t RECURSION_LEVELS = 0;
@@ -334,6 +334,16 @@ int main(int argc, char** argv) {
     */
     auto bt =
         std::make_unique<BBT>(*bv, arity, 1, leaf_length, threads, queue_size);
+
+#ifdef BT_DBG
+    size_t cnt = 0;
+    for (const auto &b : *bt->leaf_bits_) {
+      if (b) {
+        cnt++;
+      }
+    }
+    std::cout << "num ones: " << cnt << "/" << bt->leaf_bits_->size() << " (" << static_cast<double>(cnt) * 100 / bt->leaf_bits_->size() << "%)" << std::endl;
+#endif
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();
