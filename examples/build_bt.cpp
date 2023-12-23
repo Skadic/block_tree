@@ -24,7 +24,8 @@
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
 #include <syncstream>
 
-#define PAR_SHARDED_SYNC
+#define BT_DBG
+#define REC_PAR_SHARDED
 #define REC_DENSE_BIT
 
 #if defined REC_BIT || defined REC_DENSE_BIT || defined REC_PAR_SHARDED
@@ -336,18 +337,23 @@ int main(int argc, char** argv) {
         std::make_unique<BBT>(*bv, arity, 1, leaf_length, threads, queue_size);
 
 #ifdef BT_DBG
+/*
     size_t cnt = 0;
-    for (const auto &b : *bt->leaf_bits_) {
+    for (const auto& b : *bt->leaf_bits_) {
       if (b) {
         cnt++;
       }
     }
-    std::cout << "num ones: " << cnt << "/" << bt->leaf_bits_->size() << " (" << static_cast<double>(cnt) * 100 / bt->leaf_bits_->size() << "%)" << std::endl;
+    std::cout << "num ones: " << cnt << "/" << bt->leaf_bits_->size() << " ("
+              << static_cast<double>(cnt) * 100 / bt->leaf_bits_->size() << "%)"
+              << std::endl;
+              */
 #endif
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
                        Clock::now() - now)
                        .count();
     const size_t no_rs_space = bt->print_space_usage();
+    std::cout << "\n";
     bt->add_bit_rank_support();
     auto elapsed_rs = std::chrono::duration_cast<std::chrono::milliseconds>(
                           Clock::now() - now)

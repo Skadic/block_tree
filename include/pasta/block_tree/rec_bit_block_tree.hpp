@@ -570,6 +570,9 @@ public:
 
     // space_usage += leaves_.size() * sizeof(uint8_t);
     space_usage += sdsl::size_in_bytes(compressed_leaves_);
+#ifdef BT_DBG
+    std::cout << "leaf size: " << sdsl::size_in_bytes(compressed_leaves_) << std::endl;
+#endif
     space_usage += compress_map_.size();
 
     return space_usage;

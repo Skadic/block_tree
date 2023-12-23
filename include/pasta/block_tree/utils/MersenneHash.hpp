@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -150,6 +151,7 @@ public:
     ++mersenne_hash_comparisons;
 #endif
     if (hash_ != other.hash_) {
+      //std::cout << "hashes unequal" << std::endl;
       return false;
     }
 
@@ -160,19 +162,19 @@ public:
       if (slice_at(*text_, start_ + pos) !=
           slice_at(*other.text_, other.start_ + pos)) {
         is_same = false;
-        goto mersenne_hash_cmp_done;
+        break;
       }
     }
 
-    for (size_t i = pos; i < length_; ++i) {
-      if (get_bit(*text_, start_ + i) !=
-          get_bit(*other.text_, other.start_ + i)) {
-        is_same = false;
-        goto mersenne_hash_cmp_done;
+    if (!is_same) {
+      for (size_t i = pos; i < length_; ++i) {
+        if ((*text_)[start_ + i] != (*other.text_)[other.start_ + i]) {
+          is_same = false;
+          break;
+        }
       }
     }
 
-  mersenne_hash_cmp_done:
 #ifdef BT_INSTRUMENT
     if (!is_same) {
       // The hash is the same but the substring isn't => collision
@@ -185,15 +187,6 @@ public:
     return is_same;
   };
 
-private:
-  static bool get_bit(const pasta::BitVector& v, const size_t bit_index) {
-    return v[bit_index];
-  }
-
-  static size_t ceil_div(std::integral auto x, std::integral auto y) {
-    return 1 + ((x - 1) / y);
-  }
-
   static uint64_t slice_at(const pasta::BitVector& bv, const size_t i) {
     const std::span<uint64_t> backing = bv.data();
     const uint8_t offset = i % 64;
@@ -201,10 +194,10 @@ private:
     // TODO Check if the right shift actually shifts in zeros
     const uint64_t r =
         backing[data_index] & (~static_cast<uint64_t>(0) << offset);
-    if (offset == 0) {
+    if (offset > 0) {
       const uint64_t l = backing[data_index + 1] &
-                         (~static_cast<uint64_t>(0) >> (63 - offset));
-      return (l << (63 - offset)) | (r >> offset);
+                         (~static_cast<uint64_t>(0) >> (64 - offset));
+      return (l << (64 - offset)) | (r >> offset);
     }
     return r;
   }

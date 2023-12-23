@@ -20,7 +20,7 @@
 
 #pragma once
 
-#include "pasta/block_tree/block_tree.hpp"
+#include "pasta/block_tree/rec_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 

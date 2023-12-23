@@ -29,6 +29,7 @@
 #include <pasta/bit_vector/support/wide_rank_select.hpp>
 #include <pasta/block_tree/rec_bit_block_tree.hpp>
 #include <sdsl/int_vector.hpp>
+#include <ankerl/unordered_dense.h>
 #include <vector>
 
 namespace pasta {
@@ -419,12 +420,24 @@ public:
       delta_size = 0;
 #endif
     }
+
+    size_t ptr_cnt = 0;
+    (void)ptr_cnt;
+    size_t level = 0;
+    (void)level;
     for (const auto iv : block_tree_pointers_) {
       space_usage += (int64_t)sdsl::size_in_bytes(*iv);
       delta_size += (int64_t)sdsl::size_in_bytes(*iv);
+#ifdef BT_DBG
+      ptr_cnt += iv->size();
+      std::cout << "level " << level << " ptrs: " << iv->size()
+                << " block size: " << block_size_lvl_[level] << "\n";
+      level++;
+#endif
     }
 #ifdef BT_DBG
     std::cout << "ptrs size: " << delta_size << std::endl;
+    std::cout << "pointer count: " << ptr_cnt << std::endl;
     delta_size = 0;
 #endif
 

@@ -1152,7 +1152,7 @@ public:
     std::cout << "tau: " << this->tau_ << "\nleaf_size: " << this->leaf_size
               << "\nfinal_num_internals: " << final_num_internals
               << "\nleaf creation size: "
-              << final_num_internals * this->leaf_size * this->tau_
+              << final_num_internals * this->leaf_size * this->tau_ / 8
               << std::endl;
     size_t padded = 0;
     size_t non_padded = 0;

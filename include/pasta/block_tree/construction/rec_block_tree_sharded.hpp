@@ -1395,7 +1395,8 @@ public:
                  child_pointer < 0) {
         std::cout << "pruned node missing pointer" << std::endl;
       }
-      BT_ASSERT(!(*child_level.is_internal)[child] || child_pointer == PRUNED);
+      BT_ASSERT(!(*child_level.is_internal)[child] ||
+                child_pointer == internal::sharded::PRUNED);
       BT_ASSERT(child_pointer >= 0);
 #endif
       // Decrement the counter of where the child points

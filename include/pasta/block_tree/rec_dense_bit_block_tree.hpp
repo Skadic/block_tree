@@ -21,12 +21,17 @@
 
 #pragma once
 
+#include <bit>
 #include <cstddef>
+#include <cstdint>
+#include <iostream>
 #include <omp.h>
 #include <pasta/bit_vector/bit_vector.hpp>
 #include <pasta/bit_vector/support/optimized_for.hpp>
 #include <pasta/bit_vector/support/rank_select.hpp>
+#include <ranges>
 #include <sdsl/int_vector.hpp>
+#include <span>
 #include <thread>
 #include <vector>
 
@@ -488,16 +493,26 @@ public:
       delta_size += (int64_t)sdsl::size_in_bytes(*iv);
       ;
     }
+    size_t ptr_cnt = 0;
+    (void)ptr_cnt;
 #ifdef BT_DBG
     std::cout << "ptrs size: " << delta_size << std::endl;
     delta_size = 0;
+    size_t level = 0;
 #endif
     for (const auto iv : block_tree_offsets_) {
       space_usage += sdsl::size_in_bytes(*iv);
       delta_size += (int64_t)sdsl::size_in_bytes(*iv);
+#ifdef BT_DBG
+      ptr_cnt += iv->size();
+      std::cout << "level " << level << " ptrs: " << iv->size()
+                << " block size: " << block_size_lvl_[level] << "\n";
+      level++;
+#endif
     }
 #ifdef BT_DBG
     std::cout << "offs size: " << delta_size << std::endl;
+    std::cout << "pounter count: " << ptr_cnt << std::endl;
 #endif
     space_usage += block_size_lvl_.size() *
                    sizeof(typename decltype(block_size_lvl_)::value_type);
