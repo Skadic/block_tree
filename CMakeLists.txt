@@ -41,6 +41,21 @@ option(PASTA_BLOCK_TREE_BENCH
 
 include(ExternalProject)
 include(FetchContent)
+
+FetchContent_Declare(
+  tlx
+  GIT_REPOSITORY https://github.com/tlx/tlx.git
+  GIT_TAG        b6af589 #release 0.6.1
+)
+
+FetchContent_Declare(
+  pasta_bit_vector
+  GIT_REPOSITORY https://github.com/pasta-toolbox/bit_vector.git
+  GIT_TAG        05acd97 #main
+)
+
+FetchContent_MakeAvailable(tlx pasta_bit_vector)
+
 # Optional test
 if (PASTA_BLOCK_TREE_BUILD_TESTS)
     FetchContent_Declare(
@@ -75,24 +90,8 @@ if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
     endif ()
 endif ()
 
-set(ZSTD_BUILD_STATIC ON)
-set(ZSTD_BUILD_SHARED OFF)
-
-FetchContent_Declare(
-        zstd
-        URL "https://github.com/facebook/zstd/releases/download/v1.5.5/zstd-1.5.5.tar.gz"
-        DOWNLOAD_EXTRACT_TIMESTAMP TRUE
-        SOURCE_SUBDIR build/cmake
-)
-
-FetchContent_MakeAvailable(zstd)
-set_target_properties(libzstd_static PROPERTIES COMPILE_FLAGS "-w")
-
-
 set(LIBSAIS_USE_OPENMP ON CACHE BOOL "Use OpenMP for parallelization of libsais" FORCE)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
 
 set(BUILD_DIVSUFSORT64 ON CACHE BOOL "Build libdivsufsort in 64-bits mode")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/external/libdivsufsort)
@@ -113,6 +112,7 @@ add_library(pasta_block_tree INTERFACE)
 target_include_directories(pasta_block_tree INTERFACE
         ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+# sdsl
 file(GLOB sdsl_sources ${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/lib/*.cpp)
 add_library(sdsl STATIC ${sdsl_sources})
 target_include_directories(sdsl SYSTEM PUBLIC
