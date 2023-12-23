@@ -33,7 +33,6 @@
 #include <atomic>
 #include <memory>
 #include <omp.h>
-#include <robin_hood.h>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 #include <tlx/math/aggregate.hpp>

@@ -7,9 +7,6 @@
 [submodule "extlib/tlx"]
 	path = extlib/tlx
 	url = https://github.com/tlx/tlx
-[submodule "extlib/robin-hood-hashing"]
-	path = extlib/robin-hood-hashing
-	url = https://github.com/martinus/robin-hood-hashing
 [submodule "extlib/growt"]
 	path = extlib/growt
 	url = https://github.com/TooBiased/growt

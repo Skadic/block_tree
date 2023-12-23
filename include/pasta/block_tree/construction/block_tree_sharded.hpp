@@ -24,15 +24,11 @@
 #include "pasta/block_tree/rec_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
-#include "pasta/block_tree/utils/byteread.hpp"
 #include "pasta/block_tree/utils/sharded_util.hpp"
 #include "pasta/block_tree/utils/sync_sharded_map.hpp"
 
 #include <ankerl/unordered_dense.h>
-#include <atomic>
-#include <memory>
 #include <omp.h>
-#include <robin_hood.h>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 #include <tlx/math/aggregate.hpp>

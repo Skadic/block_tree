@@ -5,6 +5,8 @@ compile_commands.json
 .idea/*
 perf.data*
 .pdf
-bt_*
 *.txt
+!CMakeLists.txt
 debug
+dev/
+.vscode

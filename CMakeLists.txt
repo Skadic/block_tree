@@ -72,7 +72,6 @@ if (PASTA_BLOCK_TREE_BUILD_EXAMPLES)
     if (PASTA_BLOCK_TREE_BENCH)
         target_compile_definitions(build_bt PRIVATE BT_INSTRUMENT)
         target_compile_definitions(build_bt PRIVATE BT_BENCH)
-        #target_compile_definitions(build_bt PRIVATE ROBIN_HOOD_LOG_ENABLED)
     endif ()
 endif ()
 
@@ -94,7 +93,6 @@ set(LIBSAIS_USE_OPENMP ON CACHE BOOL "Use OpenMP for parallelization of libsais"
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/libsais)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/bit_vector)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/tlx)
-add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/robin-hood-hashing)
 
 set(BUILD_DIVSUFSORT64 ON CACHE BOOL "Build libdivsufsort in 64-bits mode")
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/extlib/sdsl-lite/external/libdivsufsort)
@@ -128,7 +126,6 @@ target_link_libraries(pasta_block_tree INTERFACE
         libsais
         pasta_bit_vector
         tlx
-        robin_hood
         waitfree-mpsc-queue
         sdsl
         #jiffy

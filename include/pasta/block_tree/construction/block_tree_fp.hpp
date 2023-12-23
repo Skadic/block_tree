@@ -24,14 +24,14 @@
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
 
-#include <robin_hood.h>
+#include <ankerl/unordered_dense.h>
 
 __extension__ typedef unsigned __int128 uint128_t;
 
 namespace pasta {
 
   template<typename key_type, typename value_type, typename hash_type=std::hash<key_type>>
-  using HashMap = robin_hood::unordered_map<key_type, value_type, hash_type>;
+  using HashMap = ankerl::unordered_dense::map<key_type, value_type, hash_type>;
 
 template <typename input_type, typename size_type>
 class BlockTreeFP : public BlockTree<input_type, size_type> {

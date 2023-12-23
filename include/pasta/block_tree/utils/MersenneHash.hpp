@@ -21,13 +21,11 @@
 
 #pragma once
 
-#include <bitset>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <functional>
 #include <pasta/bit_vector/bit_vector.hpp>
-#include <robin_hood.h>
 #include <span>
 #include <vector>
 

@@ -33,7 +33,6 @@
 #include <omp.h>
 #include <optional>
 #include <phmap.h>
-#include <robin_hood.h>
 #include <sdsl/int_vector.hpp>
 #include <sdsl/util.hpp>
 
@@ -58,26 +57,10 @@ class BlockTreeFPParParlay : public BlockTree<input_type, size_type> {
   using Rank = pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>;
 
   /// A concurrent hash map
-  /*template <typename key_type,
-            typename value_type,
-            typename hash_type = std::hash<key_type>,
-            size_t num_submaps = 6,
-            typename mutex_type = phmap::NullMutex>
-  using HashMap = phmap::parallel_flat_hash_map<
-      key_type,
-      value_type,
-      hash_type,
-      phmap::priv::hash_default_eq<key_type>,
-      phmap::priv::Allocator<
-          typename phmap::priv::Pair<const key_type, value_type>>,
-      num_submaps,
-      mutex_type>;*/
-
   template <typename key_type,
             typename value_type,
             typename hash_type = std::hash<key_type>>
   using HashMap = parlay::unordered_map<key_type, value_type, hash_type>;
-  // robin_hood::unordered_node_map<key_type, value_type, hash_type>;
 
   /// A rabin karp hasher preconfigured for the current template parameters
   using RabinKarp = MersenneRabinKarp<input_type, size_type, MERSENNE_EXPONENT>;
