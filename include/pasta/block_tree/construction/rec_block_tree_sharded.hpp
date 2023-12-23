@@ -21,7 +21,7 @@
 #pragma once
 
 #include "pasta/bit_vector/bit_vector.hpp"
-#include "pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp"
+#include "pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp"
 #include "pasta/block_tree/rec_block_tree.hpp"
 #include "pasta/block_tree/utils/MersenneHash.hpp"
 #include "pasta/block_tree/utils/MersenneRabinKarp.hpp"
@@ -1117,7 +1117,7 @@ public:
 
       if constexpr (recursion_level > 0) {
         auto* bt =
-            new RecursiveBitBlockTreeSharded<size_type, recursion_level - 1>(
+            new RecursiveDenseBitBlockTreeSharded<size_type, recursion_level - 1>(
                 *top_level.is_internal,
                 this->tau_,
                 this->s_,
@@ -1285,7 +1285,7 @@ public:
 
     if constexpr (recursion_level > 0) {
       auto* bt =
-          new RecursiveBitBlockTreeSharded<size_type, recursion_level - 1>(
+          new RecursiveDenseBitBlockTreeSharded<size_type, recursion_level - 1>(
               *is_internal,
               this->tau_,
               this->s_,

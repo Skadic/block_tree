@@ -27,7 +27,7 @@
 #include <pasta/bit_vector/support/optimized_for.hpp>
 #include <pasta/bit_vector/support/rank_select.hpp>
 #include <pasta/bit_vector/support/wide_rank_select.hpp>
-#include <pasta/block_tree/rec_bit_block_tree.hpp>
+#include <pasta/block_tree/rec_dense_bit_block_tree.hpp>
 #include <sdsl/int_vector.hpp>
 #include <ankerl/unordered_dense.h>
 #include <vector>
@@ -41,11 +41,11 @@ public:
   constexpr static bool types_is_block_tree = recursion_level > 0;
   using IsInternalType =
       std::conditional_t<types_is_block_tree,
-                         RecursiveBitBlockTree<size_type, recursion_level - 1>,
+                         RecursiveDenseBitBlockTree<size_type, recursion_level - 1>,
                          pasta::BitVector>;
   using IsInternalRankType =
       std::conditional_t<types_is_block_tree,
-                         RecursiveBitBlockTree<size_type, recursion_level - 1>,
+                         RecursiveDenseBitBlockTree<size_type, recursion_level - 1>,
                          pasta::RankSelect<pasta::OptimizedFor::ONE_QUERIES>>;
 
   /// @brief If this is true, then the only levels of the tree start to be
