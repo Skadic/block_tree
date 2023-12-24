@@ -3,6 +3,7 @@
  *
  * Copyright (C) 2022 Daniel Meyer
  * Copyright (C) 2023 Florian Kurpicz <florian@kurpicz.org>
+ * Copyright (C) 2023 Etienne Palanga
  *
  * pasta::block_tree is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,22 +20,19 @@
  *
  ******************************************************************************/
 
+#include <gtest/gtest.h>
+#include <memory>
+#include <pasta/block_tree/construction/block_tree_fp.hpp>
 #include <random>
 #include <vector>
 
-#include <gtest/gtest.h>
-
-#include <pasta/block_tree/construction/block_tree_fp.hpp>
-
 class BlockTreeFPTest : public ::testing::Test {
-
 protected:
   std::vector<uint8_t> text;
 
-  pasta::BlockTreeFP<uint8_t, int32_t> *bt;
+  std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>> bt;
 
   void SetUp() override {
-
     std::random_device rd;
     std::mt19937 gen(rd());
     std::uniform_int_distribution<uint8_t> dist(0, 15);
@@ -45,11 +43,10 @@ protected:
       text[i] = dist(gen);
     }
 
-    bt = pasta::make_block_tree_fp<uint8_t, int32_t>(text, 2, 1);
+    bt = std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>(
+        pasta::make_block_tree_fp<uint8_t, int32_t>(text, 2, 8));
     bt->add_rank_support();
   }
-
-  void TearDown() override { delete bt; }
 };
 
 TEST_F(BlockTreeFPTest, access) {
@@ -76,7 +73,7 @@ TEST_F(BlockTreeFPTest, select) {
   }
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char** argv) {
   ::testing::InitGoogleTest(&argc, argv);
   return RUN_ALL_TESTS();
 }

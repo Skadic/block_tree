@@ -431,8 +431,10 @@ class BlockTreeFP2 : public BlockTree<input_type, size_type> {
       LevelData& previous_level = levels[level_index - 1];
       found_back_block |= static_cast<size_t>(new_num_internal[level_index]) <
                           levels[level_index].is_internal->size();
-      if (!found_back_block) {
-        level.is_internal.reset();
+      if (!found_back_block && level_index < levels.size() - 1) {
+        if (level_index < levels.size() - 1) {
+          level.is_internal.reset();
+        }
         level.is_internal_rank.reset();
         level.pointers.reset();
         level.offsets.reset();
