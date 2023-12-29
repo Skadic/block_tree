@@ -161,17 +161,22 @@ struct PairOccurrences {
 template <std::signed_integral size_type>
 struct BlockOccurrences {
   /// @brief Represents the first occurrence of a block
-  struct FirstOccurrence {
+  struct [[gnu::packed]] FirstOccurrence {
     /// @brief Block index of the first occurrence of the block's content
-    size_type block;
+    int64_t block : 40;
     /// @brief The offset into the block at which that first occurrence occurs
-    size_type offset;
+    int32_t offset : 24;
 
-    inline FirstOccurrence(size_type first_occ_block_,
-                           size_type first_occ_offset_)
+    inline FirstOccurrence(int64_t first_occ_block_,
+                           int32_t first_occ_offset_)
         : block(first_occ_block_),
           offset(first_occ_offset_) {}
   };
+
+  static_assert(std::atomic<FirstOccurrence>::is_always_lock_free,
+                "first occurrence must be able to be atomically updated");
+  static_assert(sizeof(FirstOccurrence) == 8,
+                "should be size of computer word");
 
   // @brief The block index and offset of the first occurrence of this block's
   //   content

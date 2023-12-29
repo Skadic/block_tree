@@ -27,6 +27,8 @@
 #define REC_PAR_SHARDED
 #define REC_DENSE_BIT
 
+using SizeType = int64_t;
+
 #if defined REC_BIT || defined REC_DENSE_BIT || defined REC_PAR_SHARDED
 constexpr size_t RECURSION_LEVELS = 0;
 #else
@@ -35,37 +37,37 @@ constexpr size_t RECURSION_LEVELS = 0;
 
 #if defined REC_DENSE_BIT
 #  include <pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp>
-using BBT = pasta::RecursiveDenseBitBlockTreeSharded<int32_t, RECURSION_LEVELS>;
+using BBT = pasta::RecursiveDenseBitBlockTreeSharded<SizeType, RECURSION_LEVELS>;
 #  define BIT_ALGO_NAME "rec_dense_bit"
 #elif defined REC_BIT
 #  include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
-using BBT = pasta::RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>;
+using BBT = pasta::RecursiveBitBlockTreeSharded<SizeType, RECURSION_LEVELS>;
 #  define BIT_ALGO_NAME "rec_bit"
 #endif
 
 #ifdef FP
 #  include <pasta/block_tree/construction/block_tree_fp.hpp>
-std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFP<uint8_t, SizeType>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t,
         const size_t) {
   ;
-  return std::unique_ptr<pasta::BlockTreeFP<uint8_t, int32_t>>(
-      pasta::make_block_tree_fp<uint8_t, int32_t>(text, arity, leaf_length));
+  return std::unique_ptr<pasta::BlockTreeFP<uint8_t, SizeType>>(
+      pasta::make_block_tree_fp<uint8_t, SizeType>(text, arity, leaf_length));
 }
 #  define ALGO_NAME "fp"
 #elif defined FP2
 #  include <pasta/block_tree/construction/block_tree_fp2_seq.hpp>
-std::unique_ptr<pasta::BlockTreeFP2<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFP2<uint8_t, SizeType>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t,
         const size_t) {
   ;
-  return std::make_unique<pasta::BlockTreeFP2<uint8_t, int32_t>>(text,
+  return std::make_unique<pasta::BlockTreeFP2<uint8_t, SizeType>>(text,
                                                                  arity,
                                                                  1,
                                                                  leaf_length);
@@ -73,15 +75,15 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "fp2"
 #elif defined LPF
 #  include <pasta/block_tree/construction/block_tree_lpf.hpp>
-std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeLPF<uint8_t, SizeType>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t) {
   ;
-  return std::unique_ptr<pasta::BlockTreeLPF<uint8_t, int32_t>>(
-      pasta::make_block_tree_lpf_parallel<uint8_t, int32_t>(text,
+  return std::unique_ptr<pasta::BlockTreeLPF<uint8_t, SizeType>>(
+      pasta::make_block_tree_lpf_parallel<uint8_t, SizeType>(text,
                                                             arity,
                                                             leaf_length,
                                                             true,
@@ -90,14 +92,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "lpf"
 #elif defined PAR_SHARDED
 #  include <pasta/block_tree/construction/block_tree_fp_par_sharded.hpp>
-std::unique_ptr<pasta::BlockTreeFPParSharded<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFPParSharded<uint8_t, SizeType>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t) {
   ;
-  return std::make_unique<pasta::BlockTreeFPParSharded<uint8_t, int32_t>>(
+  return std::make_unique<pasta::BlockTreeFPParSharded<uint8_t, SizeType>>(
       text,
       arity,
       1,
@@ -107,14 +109,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "shard"
 #elif defined PAR_SHARDED_SYNC
 #  include <pasta/block_tree/construction/block_tree_fp_par_sync_sharded.hpp>
-std::unique_ptr<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFPParShardedSync<uint8_t, SizeType>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
   ;
-  return std::make_unique<pasta::BlockTreeFPParShardedSync<uint8_t, int32_t>>(
+  return std::make_unique<pasta::BlockTreeFPParShardedSync<uint8_t, SizeType>>(
       text,
       arity,
       1,
@@ -125,14 +127,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "shard_sync"
 #elif defined PAR_SHARDED_SYNC_SMALL
 #  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
-std::unique_ptr<pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, 0>>
+std::unique_ptr<pasta::RecursiveBlockTreeSharded<uint8_t, SizeType, 0>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
   return std::make_unique<
-      pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, 0>>(text,
+      pasta::RecursiveBlockTreeSharded<uint8_t, SizeType, 0>>(text,
                                                              arity,
                                                              1,
                                                              leaf_length,
@@ -143,14 +145,14 @@ make_bt(std::vector<uint8_t>& text,
 #elif defined REC_PAR_SHARDED
 #  include <pasta/block_tree/construction/rec_block_tree_sharded.hpp>
 std::unique_ptr<
-    pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, RECURSION_LEVELS>>
+    pasta::RecursiveBlockTreeSharded<uint8_t, int64_t, RECURSION_LEVELS>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t queue_size) {
   return std::make_unique<
-      pasta::RecursiveBlockTreeSharded<uint8_t, int32_t, RECURSION_LEVELS>>(
+      pasta::RecursiveBlockTreeSharded<uint8_t, int64_t, RECURSION_LEVELS>>(
       text,
       arity,
       1,
@@ -161,14 +163,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "rec_shard"
 #elif defined PAR_PHMAP
 #  include <pasta/block_tree/construction/block_tree_fp_par_phmap.hpp>
-std::unique_ptr<pasta::BlockTreeFPParPH<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFPParPH<uint8_t, SizeType>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t) {
   ;
-  return std::make_unique<pasta::BlockTreeFPParPH<uint8_t, int32_t>>(
+  return std::make_unique<pasta::BlockTreeFPParPH<uint8_t, SizeType>>(
       text,
       arity,
       1,
@@ -178,14 +180,14 @@ make_bt(std::vector<uint8_t>& text,
 #  define ALGO_NAME "par_map"
 #elif defined PAR_PARLAY
 #  include <pasta/block_tree/construction/block_tree_fp_par_parlay.hpp>
-std::unique_ptr<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>
+std::unique_ptr<pasta::BlockTreeFPParParlay<uint8_t, SizeType>>
 make_bt(std::vector<uint8_t>& text,
         const size_t arity,
         const size_t leaf_length,
         const size_t threads,
         const size_t) {
   ;
-  return std::make_unique<pasta::BlockTreeFPParParlay<uint8_t, int32_t>>(
+  return std::make_unique<pasta::BlockTreeFPParParlay<uint8_t, SizeType>>(
       text,
       arity,
       1,
@@ -325,7 +327,7 @@ int main(int argc, char** argv) {
 
     /*
         auto bt = std::make_unique<
-            RecursiveBitBlockTreeSharded<int32_t, RECURSION_LEVELS>>(*bv,
+            RecursiveBitBlockTreeSharded<SizeType, RECURSION_LEVELS>>(*bv,
                                                                      arity,
                                                                      1,
                                                                      leaf_length,
