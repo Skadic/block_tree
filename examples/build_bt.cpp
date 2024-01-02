@@ -20,6 +20,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include <ios>
 #include <iostream>
 #include <pasta/bit_vector/support/flat_rank_select.hpp>
 #include <syncstream>
@@ -37,7 +38,8 @@ constexpr size_t RECURSION_LEVELS = 0;
 
 #if defined REC_DENSE_BIT
 #  include <pasta/block_tree/construction/rec_dense_bit_block_tree_sharded.hpp>
-using BBT = pasta::RecursiveDenseBitBlockTreeSharded<SizeType, RECURSION_LEVELS>;
+using BBT =
+    pasta::RecursiveDenseBitBlockTreeSharded<SizeType, RECURSION_LEVELS>;
 #  define BIT_ALGO_NAME "rec_dense_bit"
 #elif defined REC_BIT
 #  include <pasta/block_tree/construction/rec_bit_block_tree_sharded.hpp>
@@ -68,9 +70,9 @@ make_bt(std::vector<uint8_t>& text,
         const size_t) {
   ;
   return std::make_unique<pasta::BlockTreeFP2<uint8_t, SizeType>>(text,
-                                                                 arity,
-                                                                 1,
-                                                                 leaf_length);
+                                                                  arity,
+                                                                  1,
+                                                                  leaf_length);
 }
 #  define ALGO_NAME "fp2"
 #elif defined LPF
@@ -84,10 +86,10 @@ make_bt(std::vector<uint8_t>& text,
   ;
   return std::unique_ptr<pasta::BlockTreeLPF<uint8_t, SizeType>>(
       pasta::make_block_tree_lpf_parallel<uint8_t, SizeType>(text,
-                                                            arity,
-                                                            leaf_length,
-                                                            true,
-                                                            threads));
+                                                             arity,
+                                                             leaf_length,
+                                                             true,
+                                                             threads));
 }
 #  define ALGO_NAME "lpf"
 #elif defined PAR_SHARDED
@@ -135,11 +137,11 @@ make_bt(std::vector<uint8_t>& text,
         const size_t queue_size) {
   return std::make_unique<
       pasta::RecursiveBlockTreeSharded<uint8_t, SizeType, 0>>(text,
-                                                             arity,
-                                                             1,
-                                                             leaf_length,
-                                                             threads,
-                                                             queue_size);
+                                                              arity,
+                                                              1,
+                                                              leaf_length,
+                                                              threads,
+                                                              queue_size);
 }
 #  define ALGO_NAME "shard_sync_small"
 #elif defined REC_PAR_SHARDED
@@ -281,31 +283,36 @@ int main(int argc, char** argv) {
   std::unique_ptr<pasta::BitVector> bv;
   std::vector<uint8_t> text;
   {
-    std::string input;
+    const size_t input_size =
+        std::ifstream(file, std::ios::binary | std::ios::ate).tellg();
     std::ifstream t(file);
-    std::stringstream buffer;
-    buffer << t.rdbuf();
-    input = buffer.str();
     if (make_bv) {
       if (one_chars.empty()) {
         // Interpret each character as 8 bits
-        bv = std::make_unique<pasta::BitVector>(input.size() * 8);
+        bv = std::make_unique<pasta::BitVector>(input_size * 8);
         std::span<std::byte> bytes = std::as_writable_bytes(bv->data());
-        for (size_t i = 0; i < input.size(); ++i) {
-          bytes[i] = std::byte{static_cast<uint8_t>(input[i])};
+        for (size_t i = 0; i < input_size; ++i) {
+          char next_byte;
+          t >> next_byte;
+          bytes[i] = std::byte{static_cast<uint8_t>(next_byte)};
         }
       } else {
         // Interpret each character as a bit
-        bv = std::make_unique<pasta::BitVector>(input.size());
+        bv = std::make_unique<pasta::BitVector>(input_size);
         std::array<bool, 256> is_one{};
         for (char c : one_chars) {
           is_one[static_cast<uint8_t>(c)] = true;
         }
-        for (size_t i = 0; i < input.size(); ++i) {
-          (*bv)[i] = is_one[static_cast<uint8_t>(input[i])];
+        for (size_t i = 0; i < input_size; ++i) {
+          char next_byte;
+          t >> next_byte;
+          (*bv)[i] = is_one[static_cast<uint8_t>(next_byte)];
         }
       }
     } else {
+      std::stringstream buffer;
+      buffer << t.rdbuf();
+      std::string input = buffer.str();
       text = std::vector<uint8_t>(input.begin(), input.end());
     }
   }
