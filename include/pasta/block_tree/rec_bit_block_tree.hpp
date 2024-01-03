@@ -276,7 +276,7 @@ public:
         pos += 8;
         ++byte_offset;
       } else {
-        for (uint8_t bit = 0; bit < 8 && rank > 0; ++bit) {
+        for (size_t bit = 0; bit < 8 && rank > 0; ++bit) {
           pos++;
           rank -= ((1 << bit) & byte) > 0;
         }
@@ -389,7 +389,7 @@ public:
         pos += 8;
         byte_offset++;
       } else {
-        for (uint8_t bit = 0; bit < 8 && rank > 0; ++bit) {
+        for (size_t bit = 0; bit < 8 && rank > 0; ++bit) {
           pos++;
           rank -= ((1 << bit) & byte) == 0;
         }
@@ -571,7 +571,8 @@ public:
     // space_usage += leaves_.size() * sizeof(uint8_t);
     space_usage += sdsl::size_in_bytes(compressed_leaves_);
 #ifdef BT_DBG
-    std::cout << "leaf size: " << sdsl::size_in_bytes(compressed_leaves_) << std::endl;
+    std::cout << "leaf size: " << sdsl::size_in_bytes(compressed_leaves_)
+              << std::endl;
 #endif
     space_usage += compress_map_.size();
 

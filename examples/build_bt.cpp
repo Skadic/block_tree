@@ -361,7 +361,6 @@ int main(int argc, char** argv) {
                        Clock::now() - now)
                        .count();
     const size_t no_rs_space = bt->print_space_usage();
-    std::cout << "\n";
     bt->add_bit_rank_support();
     auto elapsed_rs = std::chrono::duration_cast<std::chrono::milliseconds>(
                           Clock::now() - now)
@@ -376,22 +375,27 @@ int main(int argc, char** argv) {
       return 0;
     }
 
+    std::cerr << "Start verification...\n";
+
     FlatRankSelect<> frs(*bv);
 
 #if defined BT_INSTRUMENT && defined BT_DBG
     pasta::print_hash_data();
 #endif
+    std::cerr << "Access queries... " << std::flush;
 #pragma omp parallel for
     for (size_t i = 0; i < bv->size(); ++i) {
       const bool c = bt->access(i);
       if (c != (*bv)[i]) {
         std::osyncstream(std::cerr)
-            << "Access error at position " << i
+            << "\nAccess error at position " << i
             << "\nExpected: " << std::boolalpha << (*bv)[i] << "\nActual: " << c
             << std::noboolalpha << std::endl;
         exit(1);
       }
     }
+    std::cerr << "successful\n";
+    std::cerr << "Rank 1 queries... " << std::flush;
 #pragma omp parallel for
     for (size_t i = 0; i < bv->size(); i++) {
       const size_t bt_rank = bt->rank1(i);
@@ -399,38 +403,58 @@ int main(int argc, char** argv) {
 
       if (bv_rank != bt_rank) {
         std::osyncstream(std::cerr)
-            << "Rank error at position " << i << "\nExpected: " << bv_rank
-            << "\nActual: " << bt_rank << std::endl;
-        throw std::runtime_error("oof");
-      }
-    }
-    const size_t num_zeros = frs.rank0(bv->size());
-    const size_t num_ones = frs.rank1(bv->size());
-
-#pragma omp parallel for
-    for (size_t i = 1; i <= num_ones; i++) {
-      const size_t bv_rank = frs.select1(i);
-      const size_t bt_rank = bt->select1(i);
-      if (bv_rank != bt_rank) {
-        std::osyncstream(std::cerr)
-            << "Select one error at position " << i << "\nExpected: " << bv_rank
+            << "\nRank one error at position " << i << "\nExpected: " << bv_rank
             << "\nActual: " << bt_rank << std::endl;
         throw std::runtime_error("oof");
       }
     }
 
+    std::cerr << "successful\n";
+    std::cerr << "Rank 0 queries... " << std::flush;
 #pragma omp parallel for
-    for (size_t i = 1; i <= num_zeros; i++) {
-      const size_t bv_rank = frs.select0(i);
-      const size_t bt_rank = bt->select0(i);
+    for (size_t i = 0; i < bv->size(); i++) {
+      const size_t bt_rank = bt->rank0(i);
+      const size_t bv_rank = frs.rank0(i);
+
       if (bv_rank != bt_rank) {
-        std::osyncstream(std::cerr) << "Select zero error at position " << i
+        std::osyncstream(std::cerr) << "\nRank zero error at position " << i
                                     << "\nExpected: " << bv_rank
                                     << "\nActual: " << bt_rank << std::endl;
         throw std::runtime_error("oof");
       }
     }
 
+    const size_t num_zeros = frs.rank0(bv->size());
+    const size_t num_ones = frs.rank1(bv->size());
+
+    std::cerr << "successful\n";
+    std::cerr << "Select 1 queries... " << std::flush;
+#pragma omp parallel for
+    for (size_t i = 1; i <= num_ones; i++) {
+      const size_t bv_rank = frs.select1(i);
+      const size_t bt_rank = bt->select1(i);
+      if (bv_rank != bt_rank) {
+        std::osyncstream(std::cerr) << "\nSelect one error at position " << i
+                                    << "\nExpected: " << bv_rank
+                                    << "\nActual: " << bt_rank << std::endl;
+        throw std::runtime_error("oof");
+      }
+    }
+
+    std::cerr << "successful\n";
+    std::cerr << "Select 0 queries... " << std::flush;
+#pragma omp parallel for
+    for (size_t i = 1; i <= num_zeros; i++) {
+      const size_t bv_rank = frs.select0(i);
+      const size_t bt_rank = bt->select0(i);
+      if (bv_rank != bt_rank) {
+        std::osyncstream(std::cerr) << "\nSelect zero error at position " << i
+                                    << "\nExpected: " << bv_rank
+                                    << "\nActual: " << bt_rank << std::endl;
+        throw std::runtime_error("oof");
+      }
+    }
+    std::cerr << "successful" << std::endl;
   } else {
     std::cout << " algo=" << ALGO_NAME;
     // Make text block tree
@@ -447,10 +471,12 @@ int main(int argc, char** argv) {
       return 0;
     }
 
+    std::cerr << "Start verification...\n";
 #if defined BT_INSTRUMENT && defined BT_DBG
     pasta::print_hash_data();
 #endif
 
+    std::cerr << "Access queries... " << std::flush;
 #pragma omp parallel for
     for (size_t i = 0; i < text.size(); ++i) {
       const auto c = bt->access(i);
@@ -463,6 +489,7 @@ int main(int argc, char** argv) {
       }
     }
   }
+  std::cerr << "successful" << std::endl;
 
   return 0;
 }
