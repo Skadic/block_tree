@@ -41,7 +41,7 @@ static std::atomic_size_t mersenne_hash_equals = 0;
 static std::atomic_size_t mersenne_hash_collisions = 0;
 
 void print_hash_data() {
-  std::cout << "comparisons: " << mersenne_hash_comparisons
+  std::cerr << "comparisons: " << mersenne_hash_comparisons
             << ", equals: " << mersenne_hash_equals
             << ", collisions: " << mersenne_hash_collisions
             << ", percent equals: "
@@ -205,6 +205,7 @@ public:
 
 template <typename T>
 struct std::hash<pasta::MersenneHash<T>> {
+  //using is_avalanching = void;
   typename pasta::MersenneHash<T>::uint128_t
   operator()(const pasta::MersenneHash<T>& hS) const {
     return hS.hash_;

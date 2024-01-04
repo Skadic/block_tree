@@ -163,7 +163,7 @@ public:
     size_t generate_ns = 0;
 #endif
 #ifdef BT_DBG
-    std::cout << "using " << threads << " threads" << std::endl;
+    std::cerr << "using " << threads << " threads" << std::endl;
 #endif
 
 #ifdef BT_BENCH
@@ -173,7 +173,7 @@ public:
     // Construct the pre-pruned tree level by level
     for (size_t level = 0; level < static_cast<size_t>(tree_height); level++) {
 #ifdef BT_DBG
-      std::cout << "----------------- level " << level << " -----------------"
+      std::cerr << "----------------- level " << level << " -----------------"
                 << std::endl;
 #endif
 
@@ -235,7 +235,7 @@ public:
     }
 #ifdef BT_INSTRUMENT
 #  if defined(BT_DBG)
-    std::cout << "pairs: " << (pairs_ns / 1'000'000)
+    std::cerr << "pairs: " << (pairs_ns / 1'000'000)
               << "ms,\n\thash pairs: " << (bp_hash_pairs_ns / 1'000'000)
               << "ms,\n\tscan pairs: " << (bp_scan_pairs_ns / 1'000'000)
               << "ms,\n\tmarkings: " << (bp_markings_ns / 1'000'000)
@@ -268,7 +268,7 @@ public:
             .count();
     now = Clock::now();
 #  ifdef BT_DBG
-    std::cout << "prune: " << (prune_ns / 1'000'000) << "ms," << std::endl;
+    std::cerr << "prune: " << (prune_ns / 1'000'000) << "ms," << std::endl;
 #  elif defined BT_BENCH
     std::cout << " prune=" << (prune_ns / 1'000'000);
 #  endif
