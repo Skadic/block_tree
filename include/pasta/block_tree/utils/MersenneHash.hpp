@@ -205,7 +205,7 @@ public:
 
 template <typename T>
 struct std::hash<pasta::MersenneHash<T>> {
-  //using is_avalanching = void;
+  using is_avalanching = void;
   typename pasta::MersenneHash<T>::uint128_t
   operator()(const pasta::MersenneHash<T>& hS) const {
     return hS.hash_;
