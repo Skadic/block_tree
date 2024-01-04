@@ -130,7 +130,7 @@ struct PairOccurrences {
   /// We're using an std::list here instead of an std::vector, since the
   /// reallocation upon insertion lead to issues during parallel access, when
   /// another thread tries to access the vector during reallocation.
-  std::list<size_type> occurrences;
+  std::vector<size_type> occurrences;
 
   /// @brief Initialize the occurrences of a hashed block pair.
   ///
@@ -184,7 +184,7 @@ struct BlockOccurrences {
 
   /// @brief A list of block indices in which the content of the hashed block
   ///   occurs
-  std::list<size_type> occurrences;
+  std::vector<size_type> occurrences;
 
   /// @brief Initialize the occurrences of a hashed block.
   ///
