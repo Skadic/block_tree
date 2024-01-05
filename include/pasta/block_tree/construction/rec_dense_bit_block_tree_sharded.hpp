@@ -150,11 +150,11 @@ public:
 
 #ifdef BT_INSTRUMENT
 
+#  ifdef BT_BENCH
     const size_t setup_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
 
-#  ifdef BT_BENCH
     std::cout << " setup=" << setup_ns;
 #  endif
 
@@ -181,38 +181,22 @@ public:
       TimePoint now = Clock::now();
 #endif
       LevelData& current = levels.back();
-      if (2 * static_cast<uint64_t>(current.block_size) > 8) {
-        scan_block_pairs<UseHash::RABIN_KARP>(text,
-                                              current,
-                                              is_padded,
-                                              threads,
-                                              queue_size);
-      } else {
-        scan_block_pairs<UseHash::RABIN_KARP>(text,
-                                              current,
-                                              is_padded,
-                                              threads,
-                                              queue_size);
-      }
+      scan_block_pairs<UseHash::RABIN_KARP>(text,
+                                            current,
+                                            is_padded,
+                                            threads,
+                                            queue_size);
 #ifdef BT_INSTRUMENT
       pairs_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                       Clock::now() - now)
                       .count();
       now = Clock::now();
 #endif
-      if (static_cast<uint64_t>(current.block_size) > 8) {
-        scan_blocks<UseHash::RABIN_KARP>(text,
-                                         current,
-                                         is_padded,
-                                         threads,
-                                         queue_size);
-      } else {
-        scan_blocks<UseHash::RABIN_KARP>(text,
-                                         current,
-                                         is_padded,
-                                         threads,
-                                         queue_size);
-      }
+      scan_blocks<UseHash::RABIN_KARP>(text,
+                                       current,
+                                       is_padded,
+                                       threads,
+                                       queue_size);
 #ifdef BT_INSTRUMENT
       blocks_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
                        Clock::now() - now)
@@ -399,22 +383,7 @@ public:
           // doesn't exist, and add the current block to the entry
           shard.insert(hash, i);
         }
-      } /*else {
-        const uint64_t HASH_MASK = internal::sharded::HASH_MASKS[pair_size];
-        for (size_t i = start; i < end; ++i) {
-          const size_t block_start = block_starts[i];
-          const uint8_t* block_start_ptr = text.data() + block_start;
-          const uint64_t hash_value =
-              pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
-          RabinKarpHash hash(text,
-                             internal::sharded::mix_select(hash_value),
-                             block_start,
-                             block_size);
-          // Try to find the hash in the map, insert a new entry if it
-          // doesn't exist, and add the current block to the entry
-          shard.insert(hash, i);
-        }
-      }*/
+      }
 
       if (const size_t thread_order =
               threads_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -446,45 +415,26 @@ public:
 #endif
 
       if (start < static_cast<size_t>(num_block_pairs)) {
-        if constexpr (use_hash == UseHash::RABIN_KARP) {
-          RabinKarp rk(text,
-                       block_starts[start],
-                       pair_size,
-                       internal::sharded::PRIME);
-          for (size_t i = start; i < end; ++i) {
-            if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
-              continue;
-            }
-            if (block_starts[i] != static_cast<size_type>(rk.init_)) {
-              rk.restart(block_starts[i]);
-            }
-            scan_windows_in_block_pair(rk,
-                                       map,
-                                       block_size,
-                                       i
-#ifdef BT_INSTRUMENT
-                                       ,
-                                       thread_scan_hits
-#endif
-            );
+        RabinKarp rk(text,
+                     block_starts[start],
+                     pair_size,
+                     internal::sharded::PRIME);
+        for (size_t i = start; i < end; ++i) {
+          if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
+            continue;
           }
-        } else {
-          for (size_t i = start; i < end; ++i) {
-            if (!level.next_is_adjacent(i) | !level.next_is_adjacent(i + 1)) {
-              continue;
-            }
-            scan_windows_in_block_pair_identity(text,
-                                                block_starts[i],
-                                                pair_size,
-                                                map,
-                                                block_size,
-                                                i
-#ifdef BT_INSTRUMENT
-                                                ,
-                                                thread_scan_hits
-#endif
-            );
+          if (block_starts[i] != static_cast<size_type>(rk.init_)) {
+            rk.restart(block_starts[i]);
           }
+          scan_windows_in_block_pair(rk,
+                                     map,
+                                     block_size,
+                                     i
+#ifdef BT_INSTRUMENT
+                                     ,
+                                     thread_scan_hits
+#endif
+          );
         }
       }
 
@@ -615,46 +565,7 @@ public:
       occurrences.update(current_block_index);
     }
   }
-  /*
-    static inline void
-    scan_windows_in_block_pair_identity(const pasta::BitVector& text,
-                                        const size_t block_start,
-                                        const size_t pair_size,
-                                        BlockPairMap& map,
-                                        const size_t num_iterations,
-                                        const size_type current_block_index
-  #ifdef BT_INSTRUMENT
-                                        ,
-                                        tlx::Aggregate<size_t>& agg
-  #endif
-    ) {
-      const uint64_t HASH_MASK = internal::sharded::HASH_MASKS[pair_size];
-      const uint8_t* block_start_ptr = text.data() + block_start;
-      for (size_t offset = 0; offset < num_iterations; ++offset) {
-        const uint64_t hash_value =
-            pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
-        RabinKarpHash current_hash(text,
-                                   internal::sharded::mix_select(hash_value),
-                                   block_start + offset,
-                                   pair_size);
-        // Find the hash of the current window among the hashed block
-        // pairs.
-        auto found = map.find(current_hash);
-        if (found == map.end()) {
-  #ifdef BT_INSTRUMENT
-          agg.add(0);
-          continue;
-        } else {
-          agg.add(100);
-  #else
-          continue;
-  #endif
-        }
-        PairOccurrences& occurrences = found->second;
-        occurrences.update(current_block_index);
-      }
-    }
-  */
+
   /// @brief Determine the positions for each block's earliest occurrence if
   /// there is any.
   ///
@@ -739,31 +650,12 @@ public:
                                           (thread_id + 1) * segment_size);
 
       // Hash each block and store their hashes in the map
-      if constexpr (use_hash == UseHash::RABIN_KARP) {
-        RabinKarp rk(text,
-                     block_starts[0],
-                     block_size,
-                     internal::sharded::PRIME);
-        for (size_t i = start; i < end; ++i) {
-          rk.restart(block_starts[i]);
-          RabinKarpHash hash = rk.current_hash();
-          shard.insert(hash, {i, 0});
-        }
-      } /*else {
-        const uint64_t HASH_MASK = internal::sharded::HASH_MASKS[block_size];
-        for (size_t i = start; i < end; ++i) {
-          const size_t block_start = block_starts[i];
-          const uint8_t* block_start_ptr = text.data() + block_start;
-          const uint64_t hash_value =
-              pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
-          RabinKarpHash hash(text,
-                             internal::sharded::mix_select(hash_value),
-                             block_start,
-                             block_size);
-
-          shard.insert(hash, {i, 0});
-        }
-      }*/
+      RabinKarp rk(text, block_starts[0], block_size, internal::sharded::PRIME);
+      for (size_t i = start; i < end; ++i) {
+        rk.restart(block_starts[i]);
+        RabinKarpHash hash = rk.current_hash();
+        shard.insert(hash, {i, 0});
+      }
 
       if (const size_t thread_order =
               num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
@@ -796,44 +688,26 @@ public:
       // Hash every window and find the first occurrences for every
       // block.
       if (start < block_starts.size() - is_padded) {
-        if constexpr (use_hash == UseHash::RABIN_KARP) {
-          RabinKarp rk(text,
-                       block_starts[start],
-                       block_size,
-                       internal::sharded::PRIME);
-          for (size_t i = start; i < end; ++i) {
-            if (!level_data.next_is_adjacent(i)) {
-              continue;
-            }
-            if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
-              rk.restart(block_starts[i]);
-            }
-            scan_windows_in_block(rk,
-                                  links,
-                                  level_data,
-                                  i
-#ifdef BT_INSTRUMENT
-                                  ,
-                                  thread_scan_hits
-#endif
-            );
+        RabinKarp rk(text,
+                     block_starts[start],
+                     block_size,
+                     internal::sharded::PRIME);
+        for (size_t i = start; i < end; ++i) {
+          if (!level_data.next_is_adjacent(i)) {
+            continue;
           }
-        } else {
-          for (size_t i = start; i < end; ++i) {
-            if (!level_data.next_is_adjacent(i)) {
-              continue;
-            }
-            scan_windows_in_block_identity(text,
-                                           block_starts[i],
-                                           links,
-                                           level_data,
-                                           i
-#ifdef BT_INSTRUMENT
-                                           ,
-                                           thread_scan_hits
-#endif
-            );
+          if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
+            rk.restart(block_starts[i]);
           }
+          scan_windows_in_block(rk,
+                                links,
+                                level_data,
+                                i
+#ifdef BT_INSTRUMENT
+                                ,
+                                thread_scan_hits
+#endif
+          );
         }
       }
 #ifdef BT_INSTRUMENT
@@ -938,45 +812,6 @@ public:
       occurrences.update(current_block_index, offset);
     }
   }
-  /*
-    static void
-    scan_windows_in_block_identity(const std::span<const uint8_t>& text,
-                                   const size_t block_start,
-                                   BlockMap& links,
-                                   LevelData& level_data,
-                                   const size_type current_block_index
-  #ifdef BT_INSTRUMENT
-                                   ,
-                                   tlx::Aggregate<size_t>& hits
-  #endif
-    ) {
-      const uint64_t HASH_MASK =
-          internal::sharded::HASH_MASKS[level_data.block_size];
-      const uint8_t* block_start_ptr = text.data() + block_start;
-      for (size_type offset = 0; offset < level_data.block_size; ++offset) {
-        const uint64_t hash_value =
-            pasta::copy_le<uint64_t>(block_start_ptr + offset) & HASH_MASK;
-        RabinKarpHash hash(text,
-                           internal::sharded::mix_select(hash_value),
-                           block_start + offset,
-                           level_data.block_size);
-        // Find all blocks in the multimap that match our hash
-        auto found = links.find(hash);
-        if (found == links.end()) {
-  #ifdef BT_INSTRUMENT
-          hits.add(0.0);
-          continue;
-        } else {
-          hits.add(100.0);
-  #else
-          continue;
-  #endif
-        }
-        BlockOccurrences& occurrences = found->second;
-        occurrences.update(current_block_index, offset);
-      }
-    }
-  */
 
   /// @brief Generate the block size, number of block and block start indices
   /// for the next level.

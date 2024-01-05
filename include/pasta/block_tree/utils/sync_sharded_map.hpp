@@ -32,6 +32,8 @@
 #include <unordered_map>
 #include <vector>
 
+#include <tlx/math/aggregate.hpp>
+
 namespace pasta {
 
 enum Whereabouts { NOWHERE, IN_MAP, IN_QUEUE };
@@ -140,7 +142,7 @@ public:
     SeqHashMap& map_;
     Queue& task_queue_;
     std::atomic_size_t& task_count_;
-#ifdef BT_INSTRUMENT
+#if defined BT_INSTRUMENT || defined BT_DBG
     tlx::Aggregate<size_t> start_idle_ns_;
     tlx::Aggregate<size_t> handle_queue_ns_;
     tlx::Aggregate<size_t> finish_idle_ns_;
@@ -153,7 +155,7 @@ public:
           map_(sharded_map_.map_[thread_id]),
           task_queue_(sharded_map_.task_queue_[thread_id]),
           task_count_(sharded_map.task_count_[thread_id])
-#ifdef BT_INSTRUMENT
+#if defined BT_INSTRUMENT || defined BT_DBG
           ,
           start_idle_ns_(),
           handle_queue_ns_(),

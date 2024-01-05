@@ -274,8 +274,7 @@ private:
     return get_bit(idx);
   }
 
-  [[nodiscard, gnu::noinline]] constexpr bool
-  get_bit(const size_t bit_index) const {
+  [[nodiscard]] constexpr bool get_bit(const size_t bit_index) const {
     return text_[bit_index];
   }
 };

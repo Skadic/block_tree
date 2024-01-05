@@ -148,12 +148,10 @@ public:
     top_level.num_blocks = top_level.block_starts->size();
 
 #ifdef BT_INSTRUMENT
-
+#  ifdef BT_BENCH
     const size_t setup_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
             .count();
-
-#  ifdef BT_BENCH
     std::cout << " setup=" << setup_ns;
 #  endif
 
@@ -386,8 +384,8 @@ public:
       const size_t pair_size = 2 * block_size;
       const auto& block_starts = *level.block_starts;
 
-      // Hash every window and determine for all block pairs whether
-      // they have previous occurrences.
+      // Hash every window and determine for all block pairs
+      // whether they have previous occurrences.
       const size_t segment_size =
           std::max<size_t>(1, ceil_div(num_block_pairs, num_threads));
 
@@ -403,16 +401,17 @@ public:
                      pair_size,
                      internal::sharded::PRIME);
         for (size_t i = start; i < end; ++i) {
-          // If the next block is not adjacent, we cannot hash the pair
-          // starting at the current block
+          // If the next block is not adjacent, we cannot hash the
+          // pair starting at the current block
           if (!level.next_is_adjacent(i)) {
             continue;
           }
           rk.restart(block_starts[i]);
           // Move the hasher to the current block pair
           RabinKarpHash hash = rk.current_hash();
-          // Try to find the hash in the map, insert a new entry if it
-          // doesn't exist, and add the current block to the entry
+          // Try to find the hash in the map, insert a new entry if
+          // it doesn't exist, and add the current block to the
+          // entry
           shard.insert(hash, i);
         }
       } else {
@@ -427,8 +426,9 @@ public:
                              internal::sharded::mix_select(hash_value),
                              block_start,
                              block_size);
-          // Try to find the hash in the map, insert a new entry if it
-          // doesn't exist, and add the current block to the entry
+          // Try to find the hash in the map, insert a new entry if
+          // it doesn't exist, and add the current block to the
+          // entry
           shard.insert(hash, i);
         }
       }
@@ -736,7 +736,7 @@ public:
                  finish_idle_ns,                                               \
                  total_idle_ns,                                                \
                  handle_queue_ns,                                              \
-                 scan_hits,
+                 scan_hits,                                                    \
                  internal::sharded::HASH_MASKS)
 #else
 #  pragma omp parallel default(none) num_threads(threads)                      \
@@ -750,200 +750,185 @@ public:
                  internal::sharded::HASH_MASKS)
 #endif
     {
-                   const size_t num_threads = omp_get_num_threads();
-                   const size_t thread_id = omp_get_thread_num();
-                   typename BlockMap::Shard shard = links.get_shard(thread_id);
-                   const size_t block_size =
-                       std::min<size_t>(level_data.block_size, text.size());
-                   const std::vector<size_type>& block_starts =
-                       *level_data.block_starts;
-                   // Number of total iterations the for loop should do
-                   const size_t num_total_iterations =
-                       level_data.num_blocks - is_padded - 1;
-                   // The number of iterations each thread should do
-                   const size_t segment_size =
-                       ceil_div(num_total_iterations, num_threads);
-                   // The start and end index of the current thread's segment
-                   const size_t start = thread_id * segment_size;
-                   const size_t end =
-                       std::min<size_t>(num_total_iterations,
-                                        (thread_id + 1) * segment_size);
+      const size_t num_threads = omp_get_num_threads();
+      const size_t thread_id = omp_get_thread_num();
+      typename BlockMap::Shard shard = links.get_shard(thread_id);
+      const size_t block_size =
+          std::min<size_t>(level_data.block_size, text.size());
+      const std::vector<size_type>& block_starts = *level_data.block_starts;
+      // Number of total iterations the for loop should do
+      const size_t num_total_iterations = level_data.num_blocks - is_padded - 1;
+      // The number of iterations each thread should do
+      const size_t segment_size = ceil_div(num_total_iterations, num_threads);
+      // The start and end index of the current thread's segment
+      const size_t start = thread_id * segment_size;
+      const size_t end = std::min<size_t>(num_total_iterations,
+                                          (thread_id + 1) * segment_size);
 
-                   // Hash each block and store their hashes in the map
-                   if constexpr (use_hash == UseHash::RABIN_KARP) {
-                     RabinKarp rk(text,
-                                  internal::sharded::SIGMA,
-                                  block_starts[0],
-                                  block_size,
-                                  internal::sharded::PRIME);
-                     for (size_t i = start; i < end; ++i) {
-                       rk.restart(block_starts[i]);
-                       RabinKarpHash hash = rk.current_hash();
-                       shard.insert(hash, {i, 0});
-                     }
-                   } else {
-                     const uint64_t HASH_MASK =
-                         internal::sharded::HASH_MASKS[block_size /
-                                                       sizeof(input_type)];
-                     for (size_t i = start; i < end; ++i) {
-                       const size_t block_start = block_starts[i];
-                       const input_type* block_start_ptr =
-                           text.data() + block_start;
-                       const uint64_t hash_value =
-                           pasta::copy_le<uint64_t>(block_start_ptr) &
-                           HASH_MASK;
-                       RabinKarpHash hash(
-                           text,
-                           internal::sharded::mix_select(hash_value),
-                           block_start,
-                           block_size);
+      // Hash each block and store their hashes in the map
+      if constexpr (use_hash == UseHash::RABIN_KARP) {
+        RabinKarp rk(text,
+                     internal::sharded::SIGMA,
+                     block_starts[0],
+                     block_size,
+                     internal::sharded::PRIME);
+        for (size_t i = start; i < end; ++i) {
+          rk.restart(block_starts[i]);
+          RabinKarpHash hash = rk.current_hash();
+          shard.insert(hash, {i, 0});
+        }
+      } else {
+        const uint64_t HASH_MASK =
+            internal::sharded::HASH_MASKS[block_size / sizeof(input_type)];
+        for (size_t i = start; i < end; ++i) {
+          const size_t block_start = block_starts[i];
+          const input_type* block_start_ptr = text.data() + block_start;
+          const uint64_t hash_value =
+              pasta::copy_le<uint64_t>(block_start_ptr) & HASH_MASK;
+          RabinKarpHash hash(text,
+                             internal::sharded::mix_select(hash_value),
+                             block_start,
+                             block_size);
 
-                       shard.insert(hash, {i, 0});
-                     }
-                   }
+          shard.insert(hash, {i, 0});
+        }
+      }
 
-                   if (const size_t thread_order =
-                           num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
-                       thread_order == num_threads) {
-                     last_done.store(true, std::memory_order_release);
-                   }
+      if (const size_t thread_order =
+              num_done.fetch_add(1, std::memory_order_acq_rel) + 1;
+          thread_order == num_threads) {
+        last_done.store(true, std::memory_order_release);
+      }
 
-                   while (!last_done.load(std::memory_order::acquire)) {
-                     shard.handle_queue_sync(false);
-                   }
-                   barrier.arrive_and_drop();
-                   shard.handle_queue();
+      while (!last_done.load(std::memory_order::acquire)) {
+        shard.handle_queue_sync(false);
+      }
+      barrier.arrive_and_drop();
+      shard.handle_queue();
 #pragma omp barrier
 #pragma omp single
 #ifdef BT_INSTRUMENT
 
-                   {
-                     b_hash_blocks_ns +=
-                         std::chrono::duration_cast<std::chrono::nanoseconds>(
-                             Clock::now() - now)
-                             .count();
-                     now = Clock::now();
-                   }
+      {
+        b_hash_blocks_ns +=
+            std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() -
+                                                                 now)
+                .count();
+        now = Clock::now();
+      }
 
-                   tlx::Aggregate<size_t> thread_scan_hits;
+      tlx::Aggregate<size_t> thread_scan_hits;
 #else
       {
       }
 #endif
-                   // Hash every window and find the first occurrences for every
-                   // block.
-                   if (start < block_starts.size() - is_padded) {
-                     if constexpr (use_hash == UseHash::RABIN_KARP) {
-                       RabinKarp rk(text,
-                                    internal::sharded::SIGMA,
-                                    block_starts[start],
-                                    block_size,
-                                    internal::sharded::PRIME);
-                       for (size_t i = start; i < end; ++i) {
-                         if (!level_data.next_is_adjacent(i)) {
-                           continue;
-                         }
-                         if (static_cast<int64_t>(rk.init_) !=
-                             block_starts[i]) {
-                           rk.restart(block_starts[i]);
-                         }
-                         scan_windows_in_block(rk,
-                                               links,
-                                               level_data,
-                                               i
+      // Hash every window and find the first occurrences for every
+      // block.
+      if (start < block_starts.size() - is_padded) {
+        if constexpr (use_hash == UseHash::RABIN_KARP) {
+          RabinKarp rk(text,
+                       internal::sharded::SIGMA,
+                       block_starts[start],
+                       block_size,
+                       internal::sharded::PRIME);
+          for (size_t i = start; i < end; ++i) {
+            if (!level_data.next_is_adjacent(i)) {
+              continue;
+            }
+            if (static_cast<int64_t>(rk.init_) != block_starts[i]) {
+              rk.restart(block_starts[i]);
+            }
+            scan_windows_in_block(rk,
+                                  links,
+                                  level_data,
+                                  i
 #ifdef BT_INSTRUMENT
-                                               ,
-                                               thread_scan_hits
+                                  ,
+                                  thread_scan_hits
 #endif
-                         );
-                       }
-                     } else {
-                       for (size_t i = start; i < end; ++i) {
-                         if (!level_data.next_is_adjacent(i)) {
-                           continue;
-                         }
-                         scan_windows_in_block_identity(text,
-                                                        block_starts[i],
-                                                        links,
-                                                        level_data,
-                                                        i
+            );
+          }
+        } else {
+          for (size_t i = start; i < end; ++i) {
+            if (!level_data.next_is_adjacent(i)) {
+              continue;
+            }
+            scan_windows_in_block_identity(text,
+                                           block_starts[i],
+                                           links,
+                                           level_data,
+                                           i
 #ifdef BT_INSTRUMENT
-                                                        ,
-                                                        thread_scan_hits
+                                           ,
+                                           thread_scan_hits
 #endif
-                         );
-                       }
-                     }
-                   }
+            );
+          }
+        }
+      }
 #ifdef BT_INSTRUMENT
-                   auto& start_idle = shard.start_idle_ns();
-                   auto& finish_idle = shard.finish_idle_ns();
-                   auto& handle_queue = shard.handle_queue_ns();
+      auto& start_idle = shard.start_idle_ns();
+      auto& finish_idle = shard.finish_idle_ns();
+      auto& handle_queue = shard.handle_queue_ns();
 
 #  pragma omp critical
-                   {
-                     start_idle_ns.add(start_idle.sum());
-                     finish_idle_ns.add(finish_idle.sum());
-                     total_idle_ns.add(start_idle.sum() + finish_idle.sum());
-                     handle_queue_ns.add(handle_queue.sum());
-                     scan_hits += thread_scan_hits;
-                   };
+      {
+        start_idle_ns.add(start_idle.sum());
+        finish_idle_ns.add(finish_idle.sum());
+        total_idle_ns.add(start_idle.sum() + finish_idle.sum());
+        handle_queue_ns.add(handle_queue.sum());
+        scan_hits += thread_scan_hits;
+      };
 #endif
-                 }
+    }
 #ifdef BT_INSTRUMENT
-                 b_scan_blocks_ns +=
-                     std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         Clock::now() - now)
-                         .count();
-                 now = Clock::now();
+    b_scan_blocks_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
+    now = Clock::now();
 
 #  ifdef BT_DBG
-                 tlx::Aggregate<size_t> map_loads;
+    tlx::Aggregate<size_t> map_loads;
 
-                 for (size_t load : links.map_loads()) {
-                   map_loads.add(load);
-                 }
+    for (size_t load : links.map_loads()) {
+      map_loads.add(load);
+    }
 
-                 print_aggregate("Block Map Loads        ", map_loads);
-                 print_aggregate("Block Map Hits         ", scan_hits);
-                 print_aggregate("Block Idle (ms)        ",
-                                 total_idle_ns,
-                                 1'000'000);
-                 print_aggregate("Block Handle Queue (ms)",
-                                 finish_idle_ns,
-                                 1'000'000);
+    print_aggregate("Block Map Loads        ", map_loads);
+    print_aggregate("Block Map Hits         ", scan_hits);
+    print_aggregate("Block Idle (ms)        ", total_idle_ns, 1'000'000);
+    print_aggregate("Block Handle Queue (ms)", finish_idle_ns, 1'000'000);
 
-                 BT_ASSERT(links.num_inserts_.load() == links.size());
+    BT_ASSERT(links.num_inserts_.load() == links.size());
 #  endif
 #endif
 
-                 // By this point, the map should contain the first occurrences
-                 // of every respective block's content. We then fill the
-                 // pointers and offsets with this data and increment counters
-                 // accordingly
-                 links.for_each([&level_data](const RabinKarpHash&,
-                                              const BlockOccurrences& occs) {
-                   auto first_occ = occs.first_occ.load();
-                   for (const size_type occ : occs.occurrences) {
-                     if (occ == first_occ.block ||
-                         (first_occ.offset > 0 && occ == first_occ.block + 1)) {
-                       continue;
-                     }
+    // By this point, the map should contain the first occurrences
+    // of every respective block's content. We then fill the
+    // pointers and offsets with this data and increment counters
+    // accordingly
+    links.for_each(
+        [&level_data](const RabinKarpHash&, const BlockOccurrences& occs) {
+          auto first_occ = occs.first_occ.load();
+          for (const size_type occ : occs.occurrences) {
+            if (occ == first_occ.block ||
+                (first_occ.offset > 0 && occ == first_occ.block + 1)) {
+              continue;
+            }
 
-                     (*level_data.pointers)[occ] = first_occ.block;
-                     (*level_data.offsets)[occ] = first_occ.offset;
-                     const bool is_back_block = !(*level_data.is_internal)[occ];
-                     (*level_data.counters)[first_occ.block] += 1;
-                     (*level_data.counters)[first_occ.block + 1] +=
-                         is_back_block && (first_occ.offset > 0);
-                   }
-                 });
+            (*level_data.pointers)[occ] = first_occ.block;
+            (*level_data.offsets)[occ] = first_occ.offset;
+            const bool is_back_block = !(*level_data.is_internal)[occ];
+            (*level_data.counters)[first_occ.block] += 1;
+            (*level_data.counters)[first_occ.block + 1] +=
+                is_back_block && (first_occ.offset > 0);
+          }
+        });
 
 #ifdef BT_INSTRUMENT
-                 b_update_blocks_ns +=
-                     std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         Clock::now() - now)
-                         .count();
+    b_update_blocks_ns +=
+        std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now() - now)
+            .count();
 #endif
   }
 
@@ -1115,14 +1100,14 @@ public:
       sdsl::util::bit_compress(*offsets);
 
       if constexpr (recursion_level > 0) {
-        auto* bt =
-            new RecursiveDenseBitBlockTreeSharded<size_type, recursion_level - 1>(
-                *top_level.is_internal,
-                this->tau_,
-                this->s_,
-                this->max_leaf_length_,
-                threads,
-                queue_size);
+        auto* bt = new RecursiveDenseBitBlockTreeSharded<size_type,
+                                                         recursion_level - 1>(
+            *top_level.is_internal,
+            this->tau_,
+            this->s_,
+            this->max_leaf_length_,
+            threads,
+            queue_size);
         this->block_tree_types_.push_back(bt);
         this->block_tree_types_.back()->add_bit_rank_support(threads);
         this->block_tree_types_rs_.push_back(bt);

@@ -144,7 +144,7 @@ public:
   constexpr MersenneHash& operator=(const MersenneHash& other) = default;
   constexpr MersenneHash& operator=(MersenneHash&& other) = default;
 
-  [[gnu::noinline]] bool operator==(const MersenneHash& other) const {
+  inline bool operator==(const MersenneHash& other) const {
 #ifdef BT_INSTRUMENT
     ++mersenne_hash_comparisons;
 #endif
@@ -205,7 +205,6 @@ public:
 
 template <typename T>
 struct std::hash<pasta::MersenneHash<T>> {
-  using is_avalanching = void;
   typename pasta::MersenneHash<T>::uint128_t
   operator()(const pasta::MersenneHash<T>& hS) const {
     return hS.hash_;
