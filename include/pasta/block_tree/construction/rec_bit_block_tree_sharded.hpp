@@ -139,7 +139,8 @@ public:
     // Prepare the top level
     levels.emplace_back(0, top_block_size, text_len / top_block_size);
     LevelData& top_level = levels.back();
-    top_level.block_starts->reserve(internal::sharded::ceil_div(text_len, top_level.block_size));
+    top_level.block_starts->reserve(
+        internal::sharded::ceil_div(text_len, top_level.block_size));
     for (size_type i = 0; i < text_len; i += top_level.block_size) {
       top_level.block_starts->push_back(i);
     }
@@ -378,8 +379,9 @@ public:
 
       // Hash every window and determine for all block pairs whether
       // they have previous occurrences.
-      const size_t segment_size =
-          std::max<size_t>(1, internal::sharded::ceil_div(num_block_pairs, num_threads));
+      const size_t segment_size = std::max<size_t>(
+          1,
+          internal::sharded::ceil_div(num_block_pairs, num_threads));
 
       // Start and end index of the current thread's segment
       const auto start = thread_id * segment_size;
@@ -744,9 +746,10 @@ public:
           std::min<size_t>(level_data.block_size, text.size());
       const std::vector<size_type>& block_starts = *level_data.block_starts;
       // Number of total iterations the for loop should do
-      const size_t num_total_iterations = level_data.num_blocks - is_padded - 1;
+      const size_t num_total_iterations = level_data.num_blocks - is_padded;
       // The number of iterations each thread should do
-      const size_t segment_size = internal::sharded::ceil_div(num_total_iterations, num_threads);
+      const size_t segment_size =
+          internal::sharded::ceil_div(num_total_iterations, num_threads);
       // The start and end index of the current thread's segment
       const size_t start = thread_id * segment_size;
       const size_t end = std::min<size_t>(num_total_iterations,
@@ -1200,7 +1203,9 @@ public:
       const size_type last_block_parent_start =
           previous_level.block_starts->back();
       const size_type block_size = level.block_size;
-      new_size += internal::sharded::ceil_div(text_len - last_block_parent_start, block_size);
+      new_size +=
+          internal::sharded::ceil_div(text_len - last_block_parent_start,
+                                      block_size);
     }
     previous_level.block_starts.reset();
     const size_type num_internal = new_num_internal[level_index];
@@ -1223,20 +1228,20 @@ public:
     // values starting after i will still be valid pointers
     // This contains the number of pruned blocks before the block i
     std::vector<size_type>& prefix_pruned_blocks = *level.pointers;
-    for (size_type i = 0; i < level.num_blocks; i++) {
+    for (size_type i = 0; i < level.num_blocks; ++i) {
       const size_type ptr = (*level.pointers)[i];
       prefix_pruned_blocks[i] = num_pruned;
 
       // If the current block is not pruned, add it to the new tree
       if (ptr == internal::sharded::PRUNED) {
-        num_pruned++;
+        ++num_pruned;
         continue;
       }
 
       // Add it to the is_internal bit vector
       const bool block_is_internal = (*level.is_internal)[i];
       (*is_internal)[num_non_pruned] = block_is_internal;
-      num_non_pruned++;
+      ++num_non_pruned;
 
       if (block_is_internal) {
         continue;

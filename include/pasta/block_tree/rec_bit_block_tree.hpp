@@ -510,11 +510,11 @@ public:
     return bit_index - rank1(bit_index);
   }
 
-  size_t print_space_usage() const {
+  [[nodiscard]] size_t print_space_usage() const {
     size_t space_usage = sizeof(tau_) + sizeof(max_leaf_length_) + sizeof(s_) +
                          sizeof(leaf_size);
 
-    auto delta_size = 0;
+    size_t delta_size = 0;
     for (const auto* bt : block_tree_types_) {
       if constexpr (types_is_block_tree) {
         space_usage += bt->print_space_usage();
@@ -539,8 +539,8 @@ public:
     }
     delta_size = 0;
     for (const auto iv : block_tree_pointers_) {
-      space_usage += (int64_t)sdsl::size_in_bytes(*iv);
-      delta_size += (int64_t)sdsl::size_in_bytes(*iv);
+      space_usage += sdsl::size_in_bytes(*iv);
+      delta_size += sdsl::size_in_bytes(*iv);
       ;
     }
 #ifdef BT_DBG
@@ -549,7 +549,7 @@ public:
 #endif
     for (const auto iv : block_tree_offsets_) {
       space_usage += sdsl::size_in_bytes(*iv);
-      delta_size += (int64_t)sdsl::size_in_bytes(*iv);
+      delta_size += sdsl::size_in_bytes(*iv);
     }
 #ifdef BT_DBG
     std::cout << "offs size: " << delta_size << std::endl;
@@ -586,8 +586,6 @@ public:
     }
     rank_support = true;
 
-    // FIXME For the last level where block_tree_types_ is a bitvec, using
-    //  multiple threads doesn't work for some reason
     if constexpr (recursion_level == 0) {
       threads = 1;
     }
@@ -603,8 +601,6 @@ public:
           block_tree_pointers_[level]->size());
     }
 
-    // FIXME: breaks if parallelism is used
-    // #pragma omp parallel for default(none) num_threads(threads)
     for (size_t block = 0; block < block_tree_types_[0]->size(); block++) {
       bit_rank_block(0, block);
     }
