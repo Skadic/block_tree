@@ -757,7 +757,7 @@ public:
           std::min<size_t>(level_data.block_size, text.size());
       const std::vector<size_type>& block_starts = *level_data.block_starts;
       // Number of total iterations the for loop should do
-      const size_t num_total_iterations = level_data.num_blocks - is_padded - 1;
+      const size_t num_total_iterations = level_data.num_blocks - is_padded;
       // The number of iterations each thread should do
       const size_t segment_size = ceil_div(num_total_iterations, num_threads);
       // The start and end index of the current thread's segment
